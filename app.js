@@ -249,9 +249,13 @@ function recompute() {
         mf.position = Math.min(pos, mf.lastOffset);
       }
     }
-    if (w.dataset.ghost === g) continue;
+    const hints = result.hints[w.dataset.id] ?? [], key = g + JSON.stringify(hints);
+    if (w.dataset.ghostKey === key) continue;
+    w.dataset.ghostKey = key;
     w.dataset.ghost = g;
-    w.lastChild.innerHTML = g ? convertLatexToMarkup(g) + '<kbd>Tab</kbd>' : '';
+    // e.g. "C_Lα isn't defined, did you mean C_La?" (a typed where α was meant, or the other way round)
+    const hint = hints.map(([unknown, known]) => `<span class="near">${convertLatexToMarkup(unknown)} isn't defined. Did you mean ${convertLatexToMarkup(known)}?</span>`).join('');
+    w.lastChild.innerHTML = (g ? convertLatexToMarkup(g) + '<kbd>Tab</kbd>' : '') + hint;
   }
   renderVars();
   updateDpLabel();

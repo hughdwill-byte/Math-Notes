@@ -104,9 +104,10 @@ export function scan(t) {
     // a derivative written as a quantity, e.g. \frac{\partial\varepsilon}{\partial\alpha}
     if (tk === '\\frac' && t[i + 1] === '{') {
       const e1 = groupEnd(t, i + 1), e2 = t[e1] === '{' ? groupEnd(t, e1) : -1;
-      const part = g => (g[0] === 'd' || g[0] === '\\partial') && symbolAt(g, 1)?.end === g.length ? g[0] + symbolAt(g, 1).name : null;
+      // dε/dα and ∂ε/∂α are the same quantity (same name)
+      const part = g => (g[0] === 'd' || g[0] === '\\partial') && symbolAt(g, 1)?.end === g.length ? 'd' + symbolAt(g, 1).name : null;
       const a = e2 > 0 && part(t.slice(i + 2, e1 - 1)), b = a && part(t.slice(e1 + 1, e2 - 1));
-      if (b && a[0] === b[0]) {
+      if (b) {
         occ.push({ start: i, end: e2, name: `${a}/${b}`.replace(/\\/g, ''), latex: join(t.slice(i, e2)) });
         i = e2; continue;
       }
@@ -290,7 +291,7 @@ function toLatex(ce, x, back, inner = false) {
     case 'Add': return a.map((y, i) => { const s = toLatex(ce, y, back); return i && !/^-/.test(s) ? '+' + s : s; }).join('');
     case 'Subtract': return `${t(a[0])}-${wrap(a[1])}`;
     case 'Negate': return `-${wrap(a[0])}`;
-    case 'Multiply': return a.map(wrap).reduce((s, f, i) => s + (i && (/^[\d.]/.test(f) || /\d$/.test(s) && /^\d/.test(f)) ? '\\cdot ' : '') + f, '');
+    case 'Multiply': return a.map((y, i) => (i === 0 && isNum(y) ? formatNumber(y, null) : wrap(y))).reduce((s, f, i) => s + (i && (/^[\d.]/.test(f) || /\d$/.test(s) && /^\d/.test(f)) ? '\\cdot ' : '') + f, '');
     case 'Divide': case 'Rational': return `\\frac{${toLatex(ce, a[0], back)}}{${toLatex(ce, a[1], back)}}`;
     case 'Power': return `${Array.isArray(a[0]) || (isNum(a[0]) && a[0] < 0) ? `\\left(${t(a[0])}\\right)` : t(a[0])}^{${toLatex(ce, a[1], back)}}`;
     case 'Sqrt': return `\\sqrt{${toLatex(ce, a[0], back)}}`;
@@ -515,10 +516,26 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
     const to = parseUnit(unitOverrides[name]), v = Object.keys(unit).length ? convertValue(value, unit, to) : null;
     return { value: v ?? value, unit: to };
   };
+  const hints = {}; // id -> Map(unknown latex -> similar known latex)
   const typedDp = {}; // name -> decimal places of a typed answer (the app keeps them as that variable's setting)
   const refill = {}; // id -> the part of a typed line to keep, with ghosts[id] put live after it
   const vars = new Map(initial.map(u => [u.key, { latex: u.latex, id: 'universal', ...chosen(u.key, u.value, parseUnit(u.unit)) }])), ghosts = {};
-  const vals = () => Object.fromEntries([...vars].map(([k, v]) => [k, formatNumber(v.value, dp[k])]));
+  // Values to put into a part of an equation. If the part mixes scales of the same kind of unit (mm with m,
+  // kPa with Pa...), every variable goes in converted to base SI units so the numbers agree.
+  const sameKind = (a, b) => { const [fa, da] = toSI({ [a]: 1 }), [fb, db] = toSI({ [b]: 1 }); return a !== b && sameUnit(da, db) && fa !== fb; };
+  const mixed = t => {
+    if (!t) return false;
+    const names = Object.keys(Object.assign({}, ...scan(t).occ.map(o => vars.get(o.name)?.unit ?? {})));
+    return names.some((a, i) => names.slice(i + 1).some(b => sameKind(a, b)));
+  };
+  const vals = t => {
+    const si = mixed(t);
+    return Object.fromEntries([...vars].map(([k, v]) => {
+      if (!si) return [k, formatNumber(v.value, dp[k])];
+      const [f] = toSI(v.unit ?? {});
+      return [k, formatNumber(round10(v.value * f), null)];
+    }));
+  };
   const set = (name, latex, value, id, unit = {}) => {
     ({ value, unit } = chosen(name, value, unit));
     if (dp[name] != null) value = Number(value.toFixed(dp[name]));
@@ -529,7 +546,8 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
     const { occ } = scan(t), names = [...new Set(occ.map(o => o.name))];
     const ph = Object.fromEntries(names.map((n, i) => [n, `\\mathrm{qq${String.fromCharCode(97 + Math.floor(i / 26))}${String.fromCharCode(97 + i % 26)}}`]));
     const back = Object.fromEntries(names.map(n => [ph[n].slice(8, -1), n]));
-    try { return unitOfJson(ce.parse(join(substitute(t, occ, ph)), { canonical: false }).json, s => back[s] ? extra[back[s]] ?? vars.get(back[s])?.unit ?? {} : {}); } catch { return null; }
+    const si = mixed(t), unitOfVar = n => (si ? toSI(vars.get(n)?.unit ?? {})[1] : vars.get(n)?.unit ?? {});
+    try { return unitOfJson(ce.parse(join(substitute(t, occ, ph)), { canonical: false }).json, s => back[s] ? extra[back[s]] ?? unitOfVar(back[s]) : {}); } catch { return null; }
   };
   // Unit suggestions: wherever a variable appears in an equation, the unit that would make both sides match,
   // using the units known at that line (unknown ones count as no unit, so it's a closest fit). Most common first.
@@ -552,7 +570,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
   const evalTokens = (t, extra = {}) => {
     const { occ } = scan(t);
     if (occ.some(o => !(o.name in extra) && !vars.has(o.name))) return null;
-    try { return toNumber(ce.parse(join(substitute(t, occ, { ...vals(), ...extra }))).N()); } catch { return null; }
+    try { return toNumber(ce.parse(join(substitute(t, occ, { ...vals(t), ...extra }))).N()); } catch { return null; }
   };
 
   for (const { id, latex } of eqs) {
@@ -606,7 +624,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
           if (last && !unknownsIn(last.s).length && !PLAIN_NUMBER.test(join(last.p))) {
             const pre = trailingEmpty ? '' : '=';
             const num = withUnit(formatNumber(vars.get(target.name).value, dp[target.name]), vars.get(target.name).unit);
-            ghost = showWorking && last.s.occ.length ? `${pre}${join(substitute(last.p, last.s.occ, vals()))}=${num}` : pre + num;
+            ghost = showWorking && last.s.occ.length ? `${pre}${join(substitute(last.p, last.s.occ, vals(last.p)))}=${num}` : pre + num;
           }
           continue;
         }
@@ -615,9 +633,16 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
         const value = evalTokens(parts[0]);
         if (value != null) {
           const num = withUnit(formatNumber(value, null), unitOf(parts[0]));
-          ghost = showWorking && scans[0].occ.length ? `${join(substitute(parts[0], scans[0].occ, vals()))}=${num}` : num;
+          ghost = showWorking && scans[0].occ.length ? `${join(substitute(parts[0], scans[0].occ, vals(parts[0])))}=${num}` : num;
         }
         continue;
+      }
+
+      // an unknown that looks like a known variable (a typed instead of α, ...): say so
+      const looks = n => n.replace(/var(epsilon|theta|phi)/g, '$1').replace(/alpha/g, 'a').replace(/[_{}\\]/g, '');
+      for (const o of parts.flatMap((p, i) => unknownsIn(scans[i]))) {
+        const near = [...vars.keys()].find(k => k !== o.name && looks(k) === looks(o.name));
+        if (near) (hints[id] ??= new Map()).set(o.latex, vars.get(near).latex);
       }
 
       // "... =" with unknowns left: fill in what's known, work out what can be, leave the unknowns as they are
@@ -632,8 +657,8 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
           back[p] = src.s.occ.find(o => o.name === n).latex;
         });
         try {
-          const withNumbers = join(substitute(src.p, src.s.occ, vals()));
-          const simplified = toLatex(ce, fold(ce, ce.parse(join(substitute(src.p, src.s.occ, { ...vals(), ...ph })), { canonical: false }).json), back);
+          const withNumbers = join(substitute(src.p, src.s.occ, vals(src.p)));
+          const simplified = toLatex(ce, fold(ce, ce.parse(join(substitute(src.p, src.s.occ, { ...vals(src.p), ...ph })), { canonical: false }).json), back);
           const steps = [showWorking && src.s.occ.some(o => vars.has(o.name)) ? withNumbers : null, simplified]
             .filter((x, i, l) => x && x !== join(src.p) && x !== l[i - 1]);
           if (steps.length) ghost = steps.join('=');
@@ -652,7 +677,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
       const ph = 'UVWXYZQRSTKLMN'.split('').find(c => !used.has(c) && !vars.has(c));
       let fa, fb;
       try {
-        const mk = x => ce.parse(join(substitute(x.p, x.s.occ, { ...vals(), [u]: ph })));
+        const mk = x => ce.parse(join(substitute(x.p, x.s.occ, { ...vals(x.p), [u]: ph })));
         fa = mk(a); fb = mk(b);
       } catch { continue; }
       const root = findRoot(x => {
@@ -671,5 +696,5 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
     if (ghost) ghosts[id] = ghost;
   }
   const suggest = Object.fromEntries(Object.entries(counts).map(([n, c]) => [n, Object.keys(c).sort((a, b) => c[b] - c[a])]));
-  return { vars, ghosts, suggest, refill, typedDp };
+  return { vars, ghosts, suggest, refill, typedDp, hints: Object.fromEntries(Object.entries(hints).map(([k, m]) => [k, [...m]])) };
 }

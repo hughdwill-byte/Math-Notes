@@ -42,7 +42,7 @@ assert.deepEqual(eqs(word), ['C_{l_{\\alpha_{Wing}}}=0.108\\text{ 1/deg}', 'c_{R
 assert.deepEqual(parseVariables(word).skipped, []);
 // Word's maths letters and invisible characters: 𝜕𝜀/𝜕𝛼 (mathematical italic), ϵ, function-application mark
 for (const n of ['(𝜕𝜀)/(𝜕𝛼)', '(∂ϵ)/(∂α)', '(∂⁡ε)∕(∂α)', '𝜕𝜀/𝜕𝛼'])
-  assert.equal(parseVariables(`QUANTITY\tVALUE\tUNITS\n${n}\t0.606\t/rad`).vars[0]?.key, 'partialepsilon/partialalpha', n);
+  assert.equal(parseVariables(`QUANTITY\tVALUE\tUNITS\n${n}\t0.606\t/rad`).vars[0]?.key, 'depsilon/dalpha', n);
 assert.equal(parseVariables('Symbol\tValue\n𝑚\t5').vars[0].latex, 'm=5');
 // lines that just set a variable to a number (so a re-paste updates them)
 assert.equal(plainDefinition('m=1200\\text{ kg}'), 'm');
@@ -122,6 +122,19 @@ r = evaluateDocument(ce, ['c=0.125\\text{ m}', 'b=2c=0.3'].map((latex, id) => ({
 assert.equal(r.refill[1], 'b=2c=0.3'); assert.equal(r.ghosts[1], '\\text{ m}'); assert.equal(r.vars.get('b').value, 0.3);
 r = evaluateDocument(ce, ['c=0.125\\text{ m}', 'b=2c=0.25'].map((latex, id) => ({ id, latex })), {}, true, [], { b: 'mm' });
 assert.equal(r.ghosts[1], '=250\\text{ mm}'); // chosen unit converts the typed answer too
+// dε/dα and ∂ε/∂α are the same quantity
+assert.equal(run(['\\frac{\\partial \\varepsilon}{\\partial \\alpha}=0.606', 'k=1-\\frac{d\\varepsilon}{d\\alpha}']).vars.get('k').value, 0.394);
+// mixed scales (mm with m) are converted to SI before calculating
+r = run(['X=10\\text{ mm}', 'c=0.1102\\text{ m}', 'k=\\frac{X}{c}', 'd=X+c', 'e=2X']);
+assert.ok(Math.abs(r.vars.get('k').value - 0.0907441) < 1e-6); assert.equal(formatUnit(r.vars.get('k').unit), '');
+assert.equal(r.ghosts[2], '=\\frac{0.01}{0.1102}=0.09074410163');
+assert.ok(Math.abs(r.vars.get('d').value - 0.1202) < 1e-12); assert.equal(formatUnit(r.vars.get('d').unit), 'm');
+assert.equal(r.vars.get('e').value, 20); assert.equal(formatUnit(r.vars.get('e').unit), 'mm'); // one scale only: stays in mm
+// an unknown that looks like a known one gets a hint
+r = run(['C_{L_{a}}=4.3', 'M=2C_{L_{\\alpha}}=']);
+assert.deepEqual(r.hints[1], [['C_{L_{\\alpha}}', 'C_{L_{a}}']]);
+assert.equal(run(['a=1', 'x=-3y-2z+a=']).ghosts[1], '-3y-2z+1'); // negative coefficients read naturally
+assert.deepEqual(run(['C_{l_{a}}=6', 'C_{L_{a}}=4', 'M=C_{L_{\\alpha}}=']).hints[2], [['C_{L_{\\alpha}}', 'C_{L_{a}}']]); // case matters
 assert.deepEqual(parseVariables('Symbol\tValue\nm\t5\nTotal\tTBC').skipped, ['Total  TBC']);
 // units are ignored in maths; universal constants are known from the start and can be overridden
 r = run(['m=5\\text{ kg}', 'F=mg']);

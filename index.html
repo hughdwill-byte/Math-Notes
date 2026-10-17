@@ -57,17 +57,19 @@
   #main { flex: 1; display: flex; min-height: 0; }
   #scroller { flex: 1; overflow: auto; padding: 24px 16px 48px; position: relative; } /* keeps MathLive's hidden absolutely-positioned bits inside */
   #main { overflow: hidden; }
-  #page { background: var(--page); width: 816px; max-width: 100%; min-height: 1056px; margin: 0 auto; padding: 72px 96px; box-shadow: 0 1px 3px rgba(0,0,0,.2), 0 0 1px rgba(0,0,0,.1); cursor: text; }
+  #page { background: var(--page); width: max-content; min-width: min(816px, 100%); min-height: 1056px; margin: 0 auto; padding: 72px 96px; box-shadow: 0 1px 3px rgba(0,0,0,.2), 0 0 1px rgba(0,0,0,.1); cursor: text; }
 
   /* one equation per line */
-  .eq { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 4px 0; min-height: 36px; }
-  math-field { display: inline-block; border: 0; background: transparent; font-size: 1.35em; padding: 0 2px; min-width: 1em; --selection-background-color: #c7e0f4; --caret-color: #000; outline: none;
+  /* one line per equation, never wrapped: the page grows sideways to fit the longest one */
+  .eq { display: flex; align-items: baseline; flex-wrap: nowrap; gap: 8px; padding: 4px 0; min-height: 36px; white-space: nowrap; }
+  math-field { display: inline-block; flex: none; border: 0; background: transparent; font-size: 1.35em; padding: 0 2px; min-width: 1em; --selection-background-color: #c7e0f4; --caret-color: #000; outline: none;
     /* MathLive switches these to dark colours when the computer is in dark mode; the page is always light */
     --contains-highlight-background-color: rgba(0,0,0,.04); --contains-highlight-color: #8ab4e8; --primary: #185abd; --secondary: #4a4a4a; --placeholder-color: #605e5c; }
   math-field::part(menu-toggle), math-field::part(virtual-keyboard-toggle) { display: none; }
   @media (pointer: coarse) { math-field::part(virtual-keyboard-toggle) { display: flex; } }
-  .ghost { display: none; color: #8a8886; font-size: 1.35em; white-space: nowrap; }
+  .ghost { display: none; color: #8a8886; font-size: 1.35em; white-space: nowrap; flex: none; }
   .eq:focus-within .ghost:not(:empty) { display: inline-flex; align-items: baseline; gap: 6px; }
+  .ghost .near { font: 12px "Segoe UI", sans-serif; color: #a4262c; background: #fde7e9; border-radius: 3px; padding: 1px 6px; display: inline-flex; align-items: baseline; gap: 4px; }
   .ghost kbd { font: 10px "Segoe UI", sans-serif; border: 1px solid #c8c6c4; border-radius: 3px; padding: 0 4px; color: var(--muted); background: #fff; }
 
   /* section: a line with a heading under it */
