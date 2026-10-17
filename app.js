@@ -4,25 +4,39 @@ import { evaluateDocument, formatNumber } from './calc.js';
 
 const ce = new ComputeEngine();
 const $ = s => document.querySelector(s);
-const editor = $('#editor');
-const ZW = '\u200B'; // zero-width space around equations so the caret can sit next to them
-const STORE = 'mathnotes-doc', SETTINGS = 'mathnotes-settings';
+const doc = $('#doc');
+const PROJECTS = 'mathnotes-projects', CURRENT = 'mathnotes-current', SETTINGS = 'mathnotes-settings';
 
 const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
-const settings = { dp: {}, showWorking: true, ...load(SETTINGS, {}) };
+const settings = { showWorking: true, ...load(SETTINGS, {}) };
+
+// Projects: separate named documents, each with its own equations and decimal places.
+const projects = load(PROJECTS, null) ?? {
+  // first run, or carrying over the single document from the earlier version
+  'My notes': { blocks: load('mathnotes-doc', null) ?? [
+    { section: 'Givens' }, { eq: 'y=10' }, { eq: 'z=2' },
+    { section: 'Working' }, { eq: 'x=\\frac{y}{z}' }, { eq: '10=2b+x' }, { eq: '' },
+  ], dp: settings.dp ?? {} },
+};
+delete settings.dp;
+let project = projects[load(CURRENT, '')] ? load(CURRENT, '') : Object.keys(projects)[0];
+const dpOf = () => projects[project].dp;
 
 MathfieldElement.soundsDirectory = null;
-document.execCommand('defaultParagraphSeparator', false, 'p');
 
-// ---------- equations ----------
-let seq = 0, lastEq = null, lastRange = null, lastWasEq = false, result = { vars: new Map(), ghosts: {} };
+// The document is a list of blocks: equation lines (.eq) and sections (.section = line + heading).
+let seq = 0, current = null, result = { vars: new Map(), ghosts: {} };
+const blocks = () => [...doc.children];
+const lastEq = () => (current?.isConnected && current.classList.contains('eq') ? current : null);
 
-function makeEq(latex = '') {
-  const w = document.createElement('span');
+// An equation filled in with Tab keeps what you typed in data-base; the filled part after it is
+// recalculated every time, so changing decimal places or an earlier value updates the page.
+function makeEq(latex = '', base) {
+  const w = document.createElement('div');
   w.className = 'eq';
-  w.contentEditable = 'false';
   w.dataset.id = ++seq;
+  if (base != null) w.dataset.base = base;
   const mf = new MathfieldElement();
   mf.placeholder = '\\text{Type equation here.}';
   mf.value = latex;
@@ -30,14 +44,27 @@ function makeEq(latex = '') {
   ghost.className = 'ghost';
   w.append(mf, ghost);
 
-  mf.addEventListener('focus', () => { lastEq = w; lastWasEq = true; updateDpLabel(); });
-  mf.addEventListener('input', schedule);
-  mf.addEventListener('move-out', e => { e.preventDefault(); caretBeside(w, e.detail.direction === 'backward'); });
+  mf.addEventListener('focus', () => { current = w; updateDpLabel(); });
+  mf.addEventListener('input', () => {
+    if (w.dataset.base != null) {
+      // edited the typed part: keep it filled; edited the filled part: it becomes plain text again
+      const fill = w.dataset.fill ?? '';
+      if (fill && mf.value.endsWith(fill)) w.dataset.base = mf.value.slice(0, -fill.length);
+      else if (mf.value !== w.dataset.base) { delete w.dataset.base; delete w.dataset.fill; }
+    }
+    schedule();
+  });
+  mf.addEventListener('move-out', e => {
+    e.preventDefault();
+    const back = e.detail.direction === 'backward' || e.detail.direction === 'upward';
+    focusBlock(back ? w.previousElementSibling : w.nextElementSibling, back);
+  });
   mf.addEventListener('keydown', e => {
-    if (e.key === 'Tab' && !e.shiftKey && w.dataset.ghost) { e.preventDefault(); e.stopPropagation(); accept(w); }
-    else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); caretBeside(w); document.execCommand('insertParagraph'); }
-    else if (e.key === 'Escape') { e.preventDefault(); caretBeside(w); }
-    else if (e.key === 'Backspace' && !mf.value) { e.preventDefault(); e.stopPropagation(); caretBeside(w, true); w.remove(); schedule(); }
+    const stop = () => { e.preventDefault(); e.stopPropagation(); };
+    if (e.key === 'Tab' && !e.shiftKey && w.dataset.ghost) { stop(); accept(w); }
+    else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { stop(); addSection(w); }
+    else if (e.key === 'Enter') { stop(); addEq(w); }
+    else if (e.key === 'Backspace' && !mf.value) { stop(); removeBlock(w); }
   }, { capture: true });
   for (const type of ['copy', 'cut']) mf.addEventListener(type, e => {
     const sel = mf.selection.ranges[0], collapsed = sel[0] === sel[1];
@@ -47,50 +74,69 @@ function makeEq(latex = '') {
     e.preventDefault(); e.stopPropagation();
     if (type === 'cut' && !collapsed) mf.executeCommand('deleteBackward');
   }, { capture: true });
+  mf.addEventListener('paste', e => {
+    const html = e.clipboardData.getData('text/html');
+    if (!html.includes('data-latex')) return; // ordinary paste: let MathLive handle it
+    e.preventDefault(); e.stopPropagation();
+    pasteBlocks(html, w);
+  }, { capture: true });
   return w;
+}
+
+function makeSection(title = '') {
+  const s = document.createElement('div');
+  s.className = 'section';
+  const h = document.createElement('h2');
+  h.contentEditable = 'plaintext-only';
+  h.textContent = title;
+  s.append(document.createElement('hr'), h);
+  h.addEventListener('focus', () => { current = s; updateDpLabel(); });
+  h.addEventListener('input', schedule);
+  h.addEventListener('keydown', e => {
+    const o = getSelection().anchorOffset, len = h.textContent.length;
+    if (e.key === 'Enter') { e.preventDefault(); addEq(s); }
+    else if (e.key === 'Backspace' && !len) { e.preventDefault(); removeBlock(s); }
+    else if (e.key === 'ArrowUp' || (e.key === 'ArrowLeft' && o === 0)) { e.preventDefault(); focusBlock(s.previousElementSibling, true); }
+    else if (e.key === 'ArrowDown' || (e.key === 'ArrowRight' && o >= len)) { e.preventDefault(); focusBlock(s.nextElementSibling); }
+  });
+  return s;
+}
+
+function focusBlock(b, atEnd = false) {
+  if (!b) return;
+  if (b.classList.contains('eq')) {
+    const mf = b.firstChild;
+    mf.focus();
+    mf.position = atEnd ? mf.lastOffset : 0;
+  } else {
+    const h = b.querySelector('h2');
+    h.focus();
+    getSelection().selectAllChildren(h);
+    getSelection().collapseToEnd();
+  }
+}
+
+const after = (ref, node) => (ref?.isConnected ? ref.after(node) : doc.append(node), node);
+function addEq(ref = current, latex = '') { const w = after(ref, makeEq(latex)); focusBlock(w); schedule(); return w; }
+function addSection(ref = current) { const s = after(ref, makeSection()); focusBlock(s); schedule(); return s; }
+
+function removeBlock(b) {
+  if (!b?.isConnected) return;
+  const prev = b.previousElementSibling, next = b.nextElementSibling;
+  b.remove();
+  if (!doc.children.length) addEq();
+  else focusBlock(prev || next, !!prev);
+  schedule();
 }
 
 const mathml = latex => `<math xmlns="http://www.w3.org/1998/Math/MathML">${convertLatexToMathMl(latex)}</math>`;
-const escAttr = s => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+const esc = s => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 // Word turns the MathML into a real equation; data-latex lets us turn it back into an editable one on paste.
-const eqHtml = latex => `<span data-latex="${escAttr(latex)}">${mathml(latex)}</span>`;
+const eqHtml = latex => `<span data-latex="${esc(latex)}">${mathml(latex)}</span>`;
 
-function caretBeside(w, before = false) {
-  const r = document.createRange();
-  if (before) r.setStartBefore(w); else r.setStartAfter(w);
-  r.collapse(true);
-  editor.focus();
-  const s = getSelection();
-  s.removeAllRanges(); s.addRange(r);
-}
-
-function insertNodes(nodes) {
-  editor.focus();
-  const s = getSelection();
-  let r = lastRange && editor.contains(lastRange.startContainer) ? lastRange : null;
-  if (!r) { r = document.createRange(); r.selectNodeContents(editor); r.collapse(false); }
-  if (!editor.firstChild) { const p = document.createElement('p'); editor.append(p); r.setStart(p, 0); r.collapse(true); }
-  r.deleteContents();
-  const frag = document.createDocumentFragment();
-  frag.append(...nodes);
-  const last = frag.lastChild;
-  r.insertNode(frag);
-  r.setStartAfter(last); r.collapse(true);
-  s.removeAllRanges(); s.addRange(r);
-}
-
-function insertEquation(latex = '') {
-  const w = makeEq(latex);
-  insertNodes([ZW, w, ZW]);
-  requestAnimationFrame(() => { w.firstChild.focus(); w.firstChild.executeCommand('moveToMathfieldEnd'); });
-  schedule();
-  return w;
-}
-
-// equation being typed in, or a new one if the caret is in normal text (like Word)
+// equation being typed in, or a new one (like Word inserting an equation)
 function activeField() {
-  if (lastWasEq && lastEq?.isConnected) return lastEq.firstChild;
-  return insertEquation().firstChild;
+  return (lastEq() || addEq()).firstChild;
 }
 
 function insertIntoEq(latex) {
@@ -100,13 +146,13 @@ function insertIntoEq(latex) {
   schedule();
 }
 
-function accept(w = lastEq) {
+function accept(w = lastEq()) {
   if (!w?.dataset.ghost) return;
-  const mf = w.firstChild;
-  mf.focus();
-  mf.executeCommand('moveToMathfieldEnd');
-  mf.insert(w.dataset.ghost);
+  w.dataset.base = w.firstChild.value;
+  w.dataset.fill = '';
   recompute();
+  w.firstChild.focus();
+  w.firstChild.executeCommand('moveToMathfieldEnd');
 }
 
 // ---------- recalculation ----------
@@ -115,82 +161,131 @@ function schedule() { clearTimeout(timer); timer = setTimeout(recompute, 200); }
 
 function recompute() {
   // ponytail: re-evaluates the whole document each time; cache per equation if documents get huge
-  const eqs = [...editor.querySelectorAll('.eq')];
-  result = evaluateDocument(ce, eqs.map(w => ({ id: w.dataset.id, latex: w.firstChild.value })), settings.dp, settings.showWorking);
+  const eqs = [...doc.querySelectorAll('.eq')];
+  result = evaluateDocument(ce, eqs.map(w => ({ id: w.dataset.id, latex: w.dataset.base ?? w.firstChild.value })), dpOf(), settings.showWorking);
   for (const w of eqs) {
-    const g = result.ghosts[w.dataset.id] || '';
+    let g = result.ghosts[w.dataset.id] || '';
+    if (w.dataset.base != null) {
+      const mf = w.firstChild, value = w.dataset.base + g;
+      w.dataset.fill = g;
+      g = '';
+      if (mf.value !== value) {
+        const pos = mf.position;
+        mf.value = value;
+        mf.position = Math.min(pos, mf.lastOffset);
+      }
+    }
     if (w.dataset.ghost === g) continue;
     w.dataset.ghost = g;
     w.lastChild.innerHTML = g ? convertLatexToMarkup(g) + '<kbd>Tab</kbd>' : '';
   }
   renderVars();
   updateDpLabel();
-  const words = editor.innerText.replace(/\u200B/g, '').trim().split(/\s+/).filter(Boolean).length;
-  $('#words').textContent = `${words} word${words === 1 ? '' : 's'}`;
+  const n = eqs.filter(w => w.firstChild.value).length;
+  $('#eq-count').textContent = `${n} equation${n === 1 ? '' : 's'}`;
   $('#var-count').textContent = `${result.vars.size} variable${result.vars.size === 1 ? '' : 's'}`;
-  save();
+  saveProject();
+}
+
+function saveProject() {
+  projects[project] = { blocks: serialize(), dp: dpOf() };
+  store(PROJECTS, projects);
+  store(CURRENT, project);
 }
 
 function renderVars() {
   const rows = [...result.vars].map(([name, v]) => {
-    const dp = settings.dp[name];
+    const dp = dpOf()[name];
     const opts = ['<option value="">Auto</option>', ...Array.from({ length: 11 }, (_, i) => `<option${dp === i ? ' selected' : ''}>${i}</option>`)].join('');
-    return `<tr><td data-latex="${escAttr(v.latex)}" title="Insert into equation">${convertLatexToMarkup(v.latex)}</td>
+    return `<tr><td data-latex="${esc(v.latex)}" title="Insert into equation">${convertLatexToMarkup(v.latex)}</td>
       <td>${convertLatexToMarkup(formatNumber(v.value, dp))}</td>
-      <td><select data-var="${escAttr(name)}" title="Decimal places">${opts}</select></td></tr>`;
+      <td><select data-var="${esc(name)}" title="Decimal places">${opts}</select></td></tr>`;
   }).join('');
   $('#vars').innerHTML = rows
     ? `<table><tr><th>Name</th><th>Value</th><th>Decimals</th></tr>${rows}</table>`
-    : '<p class="hint">No variables yet. Insert an equation (Alt+=) and type something like x=5.</p>';
+    : '<p class="hint">No variables yet. Type something like x=5.</p>';
 }
 
 function setDp(name, dp) {
-  if (dp == null || Number.isNaN(dp)) delete settings.dp[name]; else settings.dp[name] = Math.max(0, Math.min(10, dp));
-  store(SETTINGS, settings);
+  if (dp == null || Number.isNaN(dp)) delete dpOf()[name]; else dpOf()[name] = Math.max(0, Math.min(10, dp));
   recompute();
 }
 
 // the variable an equation defines (for the ribbon's decimal buttons)
-const eqVar = () => lastEq && [...result.vars].find(([, v]) => v.id === lastEq.dataset.id)?.[0];
+const eqVar = () => lastEq() && [...result.vars].find(([, v]) => v.id === current.dataset.id)?.[0];
 function updateDpLabel() {
   const name = eqVar();
-  $('#dp-label').innerHTML = name ? `${convertLatexToMarkup(result.vars.get(name).latex)}: ${settings.dp[name] ?? 'Auto'} d.p.` : 'Decimals: Auto';
+  $('#dp-label').innerHTML = name ? `${convertLatexToMarkup(result.vars.get(name).latex)}: ${dpOf()[name] ?? 'Auto'} d.p.` : 'Decimals: Auto';
 }
 function bumpDp(delta) {
   const name = eqVar();
   if (!name) return;
-  const cur = settings.dp[name] ?? Math.min(10, (String(result.vars.get(name).value).split('.')[1] || '').length);
+  const cur = dpOf()[name] ?? Math.min(10, (String(result.vars.get(name).value).split('.')[1] || '').length);
   setDp(name, cur + delta);
 }
 
 // ---------- saving / loading ----------
-function serialize() {
-  const t = document.createElement('template'), live = editor.querySelectorAll('.eq');
-  t.innerHTML = editor.innerHTML; // inert copy: no MathLive instances get created
-  const clone = t.content;
-  clone.querySelectorAll('.eq').forEach((c, i) => { c.replaceChildren(); c.dataset.latex = live[i].firstChild.value; delete c.dataset.ghost; });
-  const div = document.createElement('div');
-  div.append(clone);
-  return div.innerHTML;
-}
+const serialize = () => blocks().map(b => b.classList.contains('eq')
+  ? { eq: b.firstChild.value, base: b.dataset.base }
+  : { section: b.querySelector('h2').textContent });
 
-function hydrate(root) {
-  root.querySelectorAll('[data-latex]').forEach(el => el.replaceWith(ZW, makeEq(el.dataset.latex), ZW));
-  return root;
-}
-
-function setDocument(html) {
+// also reads the older HTML format (equations and headings kept, other text dropped)
+function fromHtml(html) {
   const t = document.createElement('template');
-  t.innerHTML = html || '<p><br></p>';
-  editor.replaceChildren(hydrate(t.content));
+  t.innerHTML = html;
+  return [...t.content.querySelectorAll('[data-latex], h1, h2, h3')].map(el =>
+    el.dataset.latex != null ? { eq: el.dataset.latex } : { section: el.textContent.trim() });
+}
+
+function setDocument(list) {
+  if (typeof list === 'string') list = fromHtml(list);
+  doc.replaceChildren(...(list?.length ? list : [{ eq: '' }]).map(b => b.section != null ? makeSection(b.section) : makeEq(b.eq, b.base)));
+  current = null;
   recompute();
 }
 
-const save = () => store(STORE, serialize());
+function openProject(name) {
+  project = name;
+  document.title = `${name} - Math Notes`;
+  $('#doc-title').textContent = document.title;
+  setDocument(projects[name].blocks);
+  saveProject();
+  focusBlock(doc.lastElementChild, true); // ready to type straight away
+}
+
+function uniqueName(base) {
+  let n = base.trim() || 'Untitled', i = 2;
+  while (projects[n]) n = `${base.trim() || 'Untitled'} (${i++})`;
+  return n;
+}
+
+function newProject() {
+  const name = prompt('Name for the new project:', 'Untitled');
+  if (name == null) return;
+  const n = uniqueName(name);
+  projects[n] = { blocks: [], dp: {} };
+  openProject(n);
+}
+
+function renameProject() {
+  const name = prompt('Rename this project:', project);
+  if (name == null || !name.trim() || name.trim() === project) return;
+  const n = uniqueName(name);
+  projects[n] = projects[project];
+  delete projects[project];
+  openProject(n);
+}
+
+function deleteProject() {
+  if (!confirm(`Delete the project "${project}"? This cannot be undone.`)) return;
+  delete projects[project];
+  if (!Object.keys(projects).length) projects.Untitled = { blocks: [], dp: {} };
+  openProject(Object.keys(projects)[0]);
+}
 
 function download() {
-  const blob = new Blob([JSON.stringify({ html: serialize(), dp: settings.dp })], { type: 'application/json' });
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'Document.mathnotes' });
+  const blob = new Blob([JSON.stringify({ blocks: serialize(), dp: dpOf() })], { type: 'application/json' });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: project + '.mathnotes' });
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -200,83 +295,67 @@ $('#open-file').addEventListener('change', async e => {
   if (!f) return;
   try {
     const data = JSON.parse(await f.text());
-    Object.assign(settings.dp, data.dp);
-    store(SETTINGS, settings);
-    setDocument(data.html);
+    const blocks = data.blocks ?? fromHtml(data.html ?? '');
+    const n = uniqueName(f.name.replace(/\.mathnotes$/i, ''));
+    projects[n] = { blocks, dp: data.dp ?? {} };
+    openProject(n);
   } catch { alert('That file could not be opened. Choose a .mathnotes file saved from Math Notes.'); }
   e.target.value = '';
 });
 
 // ---------- clipboard ----------
-function onCopy(e, cut) {
-  const s = getSelection();
-  if (s.isCollapsed || !editor.contains(s.anchorNode)) return;
-  const div = document.createElement('div');
-  div.append(s.getRangeAt(0).cloneContents());
-  const live = new Map([...editor.querySelectorAll('.eq')].map(w => [w.dataset.id, w.firstChild.value]));
-  const eqs = [...div.querySelectorAll('.eq')];
-  const other = div.cloneNode(true);
-  other.querySelectorAll('.eq').forEach(n => n.remove());
-  const onlyEq = eqs.length === 1 && !other.textContent.replace(/\u200B/g, '').trim();
-  for (const c of eqs) {
-    const t = document.createElement('template');
-    t.innerHTML = eqHtml(live.get(c.dataset.id) ?? '');
-    c.replaceWith(t.content);
-  }
-  const html = div.innerHTML.replace(/\u200B/g, '');
-  e.clipboardData.setData('text/html', html);
-  e.clipboardData.setData('text/plain', onlyEq ? mathml(live.get(eqs[0].dataset.id)) : s.toString().replace(/\u200B/g, ''));
-  e.preventDefault();
-  if (cut) { s.deleteFromDocument(); schedule(); }
+function copyHtml(html, plain) {
+  const onCopy = e => { e.clipboardData.setData('text/html', html); e.clipboardData.setData('text/plain', plain); e.preventDefault(); e.stopPropagation(); };
+  document.addEventListener('copy', onCopy, { capture: true });
+  document.execCommand('copy');
+  document.removeEventListener('copy', onCopy, { capture: true });
 }
-editor.addEventListener('copy', e => onCopy(e, false));
-editor.addEventListener('cut', e => onCopy(e, true));
 
-function pasteHtml(html) {
-  const t = document.createElement('template');
-  t.innerHTML = html;
-  t.content.querySelectorAll('meta, style, script, title').forEach(n => n.remove());
-  insertNodes([...hydrate(t.content).childNodes]);
+function copyAll() {
+  const list = serialize().filter(b => b.section != null || b.eq);
+  copyHtml(
+    list.map(b => b.section != null ? `<hr><h2>${esc(b.section)}</h2>` : `<p>${eqHtml(b.eq)}</p>`).join(''),
+    list.map(b => b.section != null ? `\n${b.section}\n` : b.eq).join('\n'));
+}
+
+function pasteBlocks(html, ref) {
+  const list = fromHtml(html);
+  let at = ref;
+  for (const b of list) at = after(at, b.section != null ? makeSection(b.section) : makeEq(b.eq, b.base));
+  if (ref?.classList.contains('eq') && !ref.firstChild.value) ref.remove();
+  focusBlock(at, true);
   schedule();
 }
-editor.addEventListener('paste', e => {
-  const html = e.clipboardData.getData('text/html');
-  if (!html.includes('data-latex')) return; // ordinary paste
-  e.preventDefault();
-  pasteHtml(html);
-});
 
 // ---------- ribbon ----------
 const actions = {
-  insertEquation: () => insertEquation(),
+  newEq: () => addEq(),
+  newSection: () => addSection(),
+  deleteLine: () => removeBlock(current),
+  copyAll,
+  copyEq: () => { const w = lastEq(); if (w) copyHtml(eqHtml(w.firstChild.value), mathml(w.firstChild.value)); },
   accept: () => accept(),
   dpUp: () => bumpDp(1),
   dpDown: () => bumpDp(-1),
   save: download,
   print: () => print(),
   togglePane: () => { $('#pane').hidden = !$('#pane').hidden; },
-  table: () => document.execCommand('insertHTML', false, `<table>${'<tr><td><br></td><td><br></td><td><br></td></tr>'.repeat(3)}</table><p><br></p>`),
-  highlight: () => document.execCommand('hiliteColor', false, '#ffff00'),
-  color: () => document.execCommand('foreColor', false, $('#color-pick').value),
-  paste: async () => {
-    try {
-      for (const item of await navigator.clipboard.read()) {
-        if (item.types.includes('text/html')) return pasteHtml(await (await item.getType('text/html')).text());
-        if (item.types.includes('text/plain')) return document.execCommand('insertText', false, await (await item.getType('text/plain')).text());
-      }
-    } catch { alert('Your browser blocked the Paste button. Use Ctrl+V instead.'); }
-  },
-  fileMenu: (btn) => openMenu(btn, [
-    ['note_add', 'New', () => { if (confirm('Start a new blank document? The current one will be cleared.')) setDocument(''); }],
-    ['folder_open', 'Open…', () => $('#open-file').click()],
-    ['save', 'Save a copy', download],
+  fileMenu: btn => openMenu(btn, [
+    ['note_add', 'New project…', newProject],
+    ['edit', 'Rename project…', renameProject],
+    ['delete', 'Delete project…', deleteProject],
+    ['download', 'Save project to a file', download],
+    ['upload', 'Open project from a file…', () => $('#open-file').click()],
+    ['content_copy', 'Copy all for Word', copyAll],
     ['print', 'Print', () => print()],
+    ...Object.keys(projects).sort().map(n => [n === project ? 'check' : 'description', esc(n), () => openProject(n)]),
   ], true),
+  rename: renameProject,
 };
 
 document.addEventListener('mousedown', e => {
-  // keep the caret where it is when a ribbon button is pressed (like Word)
-  if (e.target.closest('#ribbon button, #titlebar button, .menu button, #vars td')) e.preventDefault();
+  // keep the caret in the equation when a ribbon button is pressed (like Word)
+  if (e.target.closest('#ribbon button, #titlebar button, .menu button, #vars td[data-latex]')) e.preventDefault();
 });
 
 document.addEventListener('click', e => {
@@ -286,13 +365,15 @@ document.addEventListener('click', e => {
   if (b.dataset.tab) {
     document.querySelectorAll('#tabs [data-tab]').forEach(t => t.classList.toggle('on', t === b));
     document.querySelectorAll('.panel').forEach(p => p.classList.toggle('on', p.id === 'tab-' + b.dataset.tab));
-  } else if (b.dataset.exec) {
-    if (lastWasEq && lastEq?.isConnected && ['undo', 'redo', 'cut', 'copy'].includes(b.dataset.exec)) {
-      lastEq.firstChild.executeCommand({ undo: 'undo', redo: 'redo', cut: 'cutToClipboard', copy: 'copyToClipboard' }[b.dataset.exec]);
-    } else document.execCommand(b.dataset.exec);
-    schedule();
-  } else if (b.dataset.block) document.execCommand('formatBlock', false, b.dataset.block);
-  else if (b.dataset.act) actions[b.dataset.act](b);
+  } else if (b.dataset.act) actions[b.dataset.act](b);
+});
+
+// clicking empty page space below the last line goes to the last equation (or starts a new one)
+$('#page').addEventListener('click', e => {
+  if (e.target !== doc && e.target !== $('#page')) return;
+  const last = doc.lastElementChild;
+  if (last?.classList.contains('eq') && !last.firstChild.value) focusBlock(last);
+  else addEq(last);
 });
 
 $('#vars').addEventListener('change', e => {
@@ -301,26 +382,6 @@ $('#vars').addEventListener('change', e => {
 
 $('#show-working').checked = settings.showWorking;
 $('#show-working').addEventListener('change', e => { settings.showWorking = e.target.checked; store(SETTINGS, settings); recompute(); });
-
-function withRange(fn) {
-  if (lastRange) { const s = getSelection(); s.removeAllRanges(); s.addRange(lastRange); }
-  fn();
-  editor.focus();
-}
-$('#font').addEventListener('change', e => withRange(() => document.execCommand('fontName', false, e.target.value)));
-$('#size').addEventListener('change', e => withRange(() => {
-  document.execCommand('styleWithCSS', false, false);
-  document.execCommand('fontSize', false, 7);
-  editor.querySelectorAll('font[size="7"]').forEach(f => { f.removeAttribute('size'); f.style.fontSize = e.target.value + 'pt'; });
-}));
-$('#color-pick').addEventListener('input', e => { $('#color-bar').style.borderColor = e.target.value; });
-$('[data-act=color]').addEventListener('contextmenu', e => { e.preventDefault(); $('#color-pick').click(); });
-$('[data-act=color]').title = 'Font Color (right-click to choose colour)';
-
-$('#zoom').addEventListener('input', e => {
-  $('#page').style.zoom = e.target.value / 100;
-  $('#zoom-label').textContent = e.target.value + '%';
-});
 
 // menus (file menu and structure galleries)
 let menu;
@@ -332,13 +393,12 @@ function openMenu(btn, items, list = false) {
   for (const [icon, label, fn] of items) {
     const b = document.createElement('button');
     b.innerHTML = list ? `<span class="icon">${icon}</span>${label}` : convertLatexToMarkup(label);
-    if (!list) b.title = label;
     b.onclick = e => { e.stopPropagation(); closeMenu(); fn(); };
     menu.append(b);
   }
   document.body.append(menu);
   const r = btn.getBoundingClientRect();
-  menu.style.left = Math.min(r.left, innerWidth - menu.offsetWidth - 8) + 'px';
+  menu.style.left = Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + 'px';
   menu.style.top = r.bottom + 2 + 'px';
 }
 document.addEventListener('click', e => { if (menu && !menu.contains(e.target) && !e.target.closest('[data-act=fileMenu], [data-struct]')) closeMenu(); }, true);
@@ -357,7 +417,7 @@ const STRUCTURES = {
   'Limit and Log': ['\\lim_{n\\to\\infty}', ['\\log_{#?}\\left(#0\\right)', '\\ln\\left(#0\\right)', '\\log\\left(#0\\right)', '\\lim_{#?\\to#?}#0', '\\lim_{x\\to\\infty}#0', 'e^{#0}', '#0!', '\\binom{#?}{#?}']],
   Matrix: ['\\begin{bmatrix}1&0\\\\0&1\\end{bmatrix}', ['\\begin{pmatrix}#?&#?\\\\#?&#?\\end{pmatrix}', '\\begin{bmatrix}#?&#?\\\\#?&#?\\end{bmatrix}', '\\begin{vmatrix}#?&#?\\\\#?&#?\\end{vmatrix}', '\\begin{pmatrix}#?&#?&#?\\\\#?&#?&#?\\\\#?&#?&#?\\end{pmatrix}']],
 };
-$('#symbols').innerHTML = SYMBOLS.map(s => `<button class="sym" data-ins="${escAttr(s)}" title="${escAttr(s)}">${convertLatexToMarkup(s)}</button>`).join('');
+$('#symbols').innerHTML = SYMBOLS.map(s => `<button class="sym" data-ins="${esc(s)}" title="${esc(s)}">${convertLatexToMarkup(s)}</button>`).join('');
 $('#structures').innerHTML = Object.entries(STRUCTURES).map(([name, [icon]]) =>
   `<button class="big" data-struct="${name}"><span class="mi">${convertLatexToMarkup(icon)}</span>${name.replace(' ', '<br>')}</button>`).join('');
 $('#symbols').addEventListener('click', e => { const b = e.target.closest('[data-ins]'); if (b) insertIntoEq(b.dataset.ins); });
@@ -366,45 +426,10 @@ $('#structures').addEventListener('click', e => {
   if (b) openMenu(b, STRUCTURES[b.dataset.struct][1].map(l => ['', l.replace(/#0|#\?/g, '\\square'), () => insertIntoEq(l)]));
 });
 
-// ---------- editor events ----------
-document.addEventListener('selectionchange', () => {
-  const s = getSelection();
-  const n = s.anchorNode;
-  if (!s.rangeCount || !editor.contains(n) || (n.nodeType === 3 ? n.parentNode : n).closest('.eq')) return;
-  lastRange = s.getRangeAt(0).cloneRange();
-  if (document.activeElement === editor) lastWasEq = false;
-});
-editor.addEventListener('input', schedule);
-
-editor.addEventListener('keydown', e => {
-  if (e.altKey && e.key === '=') { e.preventDefault(); return insertEquation(); }
-  if (e.ctrlKey && /^[lerj]$/i.test(e.key)) {
-    e.preventDefault();
-    document.execCommand({ l: 'justifyLeft', e: 'justifyCenter', r: 'justifyRight', j: 'justifyFull' }[e.key.toLowerCase()]);
-  }
-  // arrow keys step into an equation like normal text
-  if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && !e.shiftKey) {
-    const s = getSelection();
-    if (!s.isCollapsed) return;
-    const fwd = e.key === 'ArrowRight';
-    let n = s.anchorNode, o = s.anchorOffset;
-    if (n.nodeType === 3) {
-      const rest = fwd ? n.data.slice(o) : n.data.slice(0, o);
-      if (rest.replace(/\u200B/g, '')) return;
-      n = fwd ? n.nextSibling : n.previousSibling;
-    } else n = fwd ? n.childNodes[o] : n.childNodes[o - 1];
-    if (n?.classList?.contains('eq')) {
-      e.preventDefault();
-      const mf = n.firstChild;
-      mf.focus();
-      mf.position = fwd ? 0 : mf.lastOffset;
-    }
-  }
-});
-
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); download(); }
+  if (e.altKey && e.key === '=') { e.preventDefault(); addEq(); }
   if (e.key === 'Escape') closeMenu();
 });
 
-setDocument(load(STORE, '') || `<h1>My maths notes</h1><p>Press Alt+= (or click Equation) to add an equation. Type normally: / makes a fraction, ^ a power, sqrt a root.</p><p><span data-latex="y=10"></span>   <span data-latex="z=2"></span></p><p><span data-latex="x=\\frac{y}{z}"></span>  ← click this equation, then press Tab to fill in the grey working.</p><p><span data-latex="10=2b+x"></span>  ← one unknown: it is solved for you.</p><p><br></p>`);
+openProject(project);
