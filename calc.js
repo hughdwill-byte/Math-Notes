@@ -50,10 +50,17 @@ function splitTop(t, seps) {
 
 // A variable starting at t[i]: a letter, a Greek letter or a multi-letter \mathrm{AR}, with an optional
 // subscript (which may itself have subscripts). Returns { end, name, latex } or null.
+// Multi-letter names in use (e.g. AR from \mathrm{AR}_{wing}), so a typed "AR_{wing}" means that variable,
+// not A times R_wing. Set by evaluateDocument from the document's own names.
+// ponytail: module-level state; pass it through if scanning ever runs for two documents at once
+let MULTI = [];
+
 function symbolAt(t, i) {
   const tk = t[i];
   let end, name;
-  if (/^[a-zA-Z]$/.test(tk)) [end, name] = [i + 1, tk];
+  const multi = /^[a-zA-Z]$/.test(tk) && MULTI.find(m => t.slice(i, i + m.length).join('') === m);
+  if (multi) [end, name] = [i + multi.length, multi];
+  else if (/^[a-zA-Z]$/.test(tk)) [end, name] = [i + 1, tk];
   else if (GREEK.has(tk)) [end, name] = [i + 1, tk.slice(1).replace(/^var/, '')];
   else if ((tk === '\\mathrm' || tk === '\\operatorname') && t[i + 1] === '{') {
     const ge = groupEnd(t, i + 1), inner = join(t.slice(i + 2, ge - 1));
@@ -312,6 +319,8 @@ export function parseVariables(text) {
 // initial: [{key, latex, value}] variables known before the first line (universal constants).
 // Returns { vars: Map name -> {value, latex, id}, ghosts: {id: latex to append} }
 export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
+  const all = [...eqs, ...initial].map(e => e.latex).join(' ');
+  MULTI = [...new Set([...all.matchAll(/\\(?:mathrm|operatorname)\{([A-Za-z]{2,})\}/g)].map(m => m[1]))].sort((a, b) => b.length - a.length);
   const vars = new Map(initial.map(u => [u.key, { value: u.value, latex: u.latex, id: 'universal' }])), ghosts = {};
   const vals = () => Object.fromEntries([...vars].map(([k, v]) => [k, formatNumber(v.value, dp[k])]));
   const set = (name, latex, value, id) => {

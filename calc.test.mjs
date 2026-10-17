@@ -54,6 +54,12 @@ assert.equal(plainDefinition('10=2b'), null);
 r = run(['\\mathrm{AR}_{wing}=4.5', 'C_{l_{\\alpha_{Wing}}}=0.1', '\\frac{\\partial\\varepsilon}{\\partial\\alpha}=0.6',
   'k=\\mathrm{AR}_{wing}\\cdot C_{l_{\\alpha_{Wing}}}\\left(1-\\frac{\\partial\\varepsilon}{\\partial\\alpha}\\right)']);
 assert.ok(Math.abs(r.vars.get('k').value - 0.18) < 1e-9);
+// AR typed as letters means the multi-letter variable AR once one exists; trailing = fills working and answer
+r = run(['\\mathrm{AR}_{wing}=4.544', 'C_{l_{\\alpha_{Wing}}}=0.108',
+  'C_{L_{\\alpha_{Wing}}}=\\frac{C_{l_{\\alpha_{Wing}}}}{1+\\frac{C_{l_{\\alpha_{Wing}}}}{\\left(\\pi AR_{wing}\\right)}}=']);
+assert.equal(r.ghosts[2], '\\frac{0.108}{1+\\frac{0.108}{\\left(\\pi\\cdot 4.544\\right)}}=0.107189065');
+assert.ok(Math.abs(r.vars.get('C_L_{alpha_{Wing}}').value - 0.107189065) < 1e-9);
+assert.equal(run(['A=2', 'R=3', 'x=AR']).vars.get('x').value, 6); // without an AR variable it is still A times R
 assert.deepEqual(parseVariables('Symbol\tValue\nm\t5\nTotal\tTBC').skipped, ['Total  TBC']);
 // units are ignored in maths; universal constants are known from the start and can be overridden
 r = run(['m=5\\text{ kg}', 'F=mg']);
