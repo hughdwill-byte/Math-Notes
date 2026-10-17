@@ -504,7 +504,8 @@ export function parseVariables(text) {
 // Walk the equations in document order. eqs: [{id, latex}]; dp: {name: places};
 // initial: [{key, latex, value, unit}] variables known before the first line (universal constants);
 // unitOverrides: {name: unit text} units chosen in the Variables pane, which win over worked-out ones.
-// Returns { vars: Map name -> {value, latex, id, unit}, ghosts: {id: latex to append}, suggest: {name: [unit text]} }
+// Returns { vars: Map name -> {value, latex, id, unit}, ghosts: {id: latex to append}, suggest: {name: [unit text]},
+//   refill: {id: latex to keep} lines whose typed answer the app should keep live (ghost appended automatically) }
 export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOverrides = {}) {
   const all = [...eqs, ...initial].map(e => e.latex).join(' ');
   MULTI = [...new Set([...all.matchAll(/\\(?:mathrm|operatorname)\{([A-Za-z]{2,})\}/g)].map(m => m[1]))].sort((a, b) => b.length - a.length);
@@ -514,6 +515,8 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
     const to = parseUnit(unitOverrides[name]), v = Object.keys(unit).length ? convertValue(value, unit, to) : null;
     return { value: v ?? value, unit: to };
   };
+  const typedDp = {}; // name -> decimal places of a typed answer (the app keeps them as that variable's setting)
+  const refill = {}; // id -> the part of a typed line to keep, with ghosts[id] put live after it
   const vars = new Map(initial.map(u => [u.key, { latex: u.latex, id: 'universal', ...chosen(u.key, u.value, parseUnit(u.unit)) }])), ghosts = {};
   const vals = () => Object.fromEntries([...vars].map(([k, v]) => [k, formatNumber(v.value, dp[k])]));
   const set = (name, latex, value, id, unit = {}) => {
@@ -576,10 +579,29 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
         if (v) ghost = withUnit(formatNumber(v.value, dp[target.name]), v.unit);
         continue;
       }
+      // the line ends in a number you typed (x = ... = 0.1102): take the value and unit from the working, then
+      // make that number live (if it matches) or at least add the unit after it
+      const typedEnd = known && known === last && typedUnit == null && si === statements.length - 1 && PLAIN_NUMBER.test(join(last.p));
+      const working = typedEnd && [...rest].reverse().find(x => x !== last && x.s.occ.length && !unknownsIn(x.s).length);
+      if (target && working) {
+        const computed = evalTokens(working.p), typed = evalTokens(last.p);
+        if (computed != null && typed != null) {
+          const matches = Math.abs(typed - computed) <= 0.005 * Math.abs(computed) + 1e-12;
+          set(target.name, target.latex, matches ? computed : typed, id, unitOf(working.p) ?? {});
+          const V = vars.get(target.name);
+          const places = join(last.p).match(/^-?\d*\.(\d+)$/)?.[1].length;
+          if (matches && dp[target.name] == null && places != null) typedDp[target.name] = places; // keep the decimals you typed
+          if (matches) { refill[id] = latex.slice(0, latex.lastIndexOf('=')); ghost = '=' + withUnit(formatNumber(V.value, dp[target.name]), V.unit); }
+          else if (Object.keys(V.unit).length) { refill[id] = latex; ghost = `\\text{ ${formatUnit(V.unit)}}`; }
+          continue;
+        }
+      }
       if (target && known) {
         const value = evalTokens(known.p);
         if (value != null) {
-          const unit = typedUnit != null && known === last && si === statements.length - 1 ? parseUnit(typedUnit) : unitOf(known.p);
+          // the unit comes from a known step that still has variables in it (a pure-number step has no units)
+          const unitPart = [...rest].reverse().find(x => !unknownsIn(x.s).length && x.s.occ.length) ?? known;
+          const unit = typedUnit != null && known === last && si === statements.length - 1 ? parseUnit(typedUnit) : unitOf(unitPart.p);
           set(target.name, target.latex, value, id, unit ?? {});
           if (last && !unknownsIn(last.s).length && !PLAIN_NUMBER.test(join(last.p))) {
             const pre = trailingEmpty ? '' : '=';
@@ -649,5 +671,5 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
     if (ghost) ghosts[id] = ghost;
   }
   const suggest = Object.fromEntries(Object.entries(counts).map(([n, c]) => [n, Object.keys(c).sort((a, b) => c[b] - c[a])]));
-  return { vars, ghosts, suggest };
+  return { vars, ghosts, suggest, refill, typedDp };
 }

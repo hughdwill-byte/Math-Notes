@@ -234,8 +234,11 @@ function recompute() {
   // ponytail: re-evaluates the whole document each time; cache per equation if documents get huge
   const eqs = [...doc.querySelectorAll('.eq')];
   result = evaluateDocument(ce, eqs.map(w => ({ id: w.dataset.id, latex: w.dataset.base ?? w.firstChild.value })), dpOf(), settings.showWorking, universals(), unitsOf());
+  const typedDp = Object.entries(result.typedDp).filter(([n]) => dpOf()[n] == null);
+  if (typedDp.length) { for (const [n, d] of typedDp) dpOf()[n] = d; return recompute(); }
   for (const w of eqs) {
     let g = result.ghosts[w.dataset.id] || '';
+    if (w.dataset.base == null && result.refill[w.dataset.id] != null) { w.dataset.base = result.refill[w.dataset.id]; w.dataset.fill = ''; }
     if (w.dataset.base != null) {
       const mf = w.firstChild, value = w.dataset.base + g;
       w.dataset.fill = g;

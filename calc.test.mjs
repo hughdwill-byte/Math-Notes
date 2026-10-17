@@ -7,7 +7,7 @@ const run = (ls, dp = {}, w = true) => evaluateDocument(ce, ls.map((latex, i) =>
 let r = run(['y=10', 'z=2', 'x=\\frac{y}{z}']);
 assert.equal(r.vars.get('x').value, 5); assert.equal(r.ghosts[2], '=\\frac{10}{2}=5');
 assert.equal(run(['y=10', 'z=2', 'x=\\frac{y}{z}'], {}, false).ghosts[2], '=5');
-r = run(['y=10', 'z=2', 'x=\\frac{y}{z}=\\frac{10}{2}=5']); assert.equal(r.ghosts[2], undefined); assert.equal(r.vars.get('x').value, 5);
+r = run(['y=10', 'z=2', 'x=\\frac{y}{z}=\\frac{10}{2}=5']); assert.equal(r.ghosts[2], '=5'); assert.equal(r.refill[2], 'x=\\frac{y}{z}=\\frac{10}{2}'); // typed answer kept live assert.equal(r.vars.get('x').value, 5);
 r = run(['a=3', '10=2b+a']); assert.ok(Math.abs(r.vars.get('b').value - 3.5) < 1e-9); assert.equal(r.ghosts[1], '\\Rightarrow b=3.5');
 r = run(['x=2', 'x^{2}+v_{0}=13']); assert.ok(Math.abs(r.vars.get('v_0').value - 9) < 1e-9);
 r = run(['t=\\sqrt{2}'], { t: 3 }); assert.equal(r.vars.get('t').value, 1.414); assert.equal(r.ghosts[0], '=1.414');
@@ -113,6 +113,15 @@ r = evaluateDocument(ce, ['C_{l}=0.108\\text{ 1/deg}', 'C_{L}=C_{l}\\cdot 2=', '
 assert.ok(Math.abs(r.vars.get('C_L').value - 12.376) < 1e-3);
 assert.match(r.ghosts[1], /=12\.37\d+\\text\{ 1\/rad\}$/);
 assert.ok(Math.abs(r.vars.get('k').value - 12.376) < 1e-3);
+// a typed answer: kept live with its unit when it matches the working, otherwise the unit is added after it
+r = evaluateDocument(ce, ['c_{root}=0.125\\text{ m}', '\\lambda=0.752', '\\bar{c}=\\frac{2}{3}c_{root}\\frac{1+\\lambda+\\lambda^{2}}{1+\\lambda}=\\frac{2}{3}\\times0.125\\times\\frac{1+0.752+0.752^{2}}{1+0.752}=0.1102'].map((latex, id) => ({ id, latex })), {}, true);
+assert.equal(r.refill[2], '\\bar{c}=\\frac{2}{3}c_{root}\\frac{1+\\lambda+\\lambda^{2}}{1+\\lambda}=\\frac{2}{3}\\times0.125\\times\\frac{1+0.752+0.752^{2}}{1+0.752}');
+assert.equal(r.ghosts[2], '=0.1102313546\\text{ m}');
+assert.deepEqual(r.typedDp, { c_bar: 4 });
+r = evaluateDocument(ce, ['c=0.125\\text{ m}', 'b=2c=0.3'].map((latex, id) => ({ id, latex })), {}, true);
+assert.equal(r.refill[1], 'b=2c=0.3'); assert.equal(r.ghosts[1], '\\text{ m}'); assert.equal(r.vars.get('b').value, 0.3);
+r = evaluateDocument(ce, ['c=0.125\\text{ m}', 'b=2c=0.25'].map((latex, id) => ({ id, latex })), {}, true, [], { b: 'mm' });
+assert.equal(r.ghosts[1], '=250\\text{ mm}'); // chosen unit converts the typed answer too
 assert.deepEqual(parseVariables('Symbol\tValue\nm\t5\nTotal\tTBC').skipped, ['Total  TBC']);
 // units are ignored in maths; universal constants are known from the start and can be overridden
 r = run(['m=5\\text{ kg}', 'F=mg']);
