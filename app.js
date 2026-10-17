@@ -1,6 +1,6 @@
 import { MathfieldElement, convertLatexToMarkup, convertLatexToMathMl } from 'https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.mjs';
 import { ComputeEngine } from 'https://cdn.jsdelivr.net/npm/@cortex-js/compute-engine@0.58.0/dist/compute-engine.min.esm.js';
-import { evaluateDocument, formatNumber, parseVarLine, parseVariables } from './calc.js';
+import { evaluateDocument, formatNumber, parseVarLine, parseVariables, plainDefinition } from './calc.js';
 
 const ce = new ComputeEngine();
 const $ = s => document.querySelector(s);
@@ -101,7 +101,7 @@ function makeEq(latex = '', base) {
     const html = e.clipboardData.getData('text/html');
     const vars = parseVarList(e.clipboardData.getData('text/plain'));
     if (html.includes('data-latex')) pasteBlocks(fromHtml(html), w);
-    else if (vars) pasteBlocks(vars, w); // a list of variables becomes one line each
+    else if (vars) pasteVars(vars, w); // a list of variables becomes one line each
     else return; // ordinary paste: let MathLive handle it
     e.preventDefault(); e.stopPropagation();
   }, { capture: true });
@@ -267,8 +267,42 @@ function parseVarList(text) {
   if (!/\n|\t/.test(text.trim())) return null;
   const { vars, skipped } = parseVariables(text);
   if (!vars.length) return null;
-  if (skipped.length) flash(`Skipped ${skipped.length} row${skipped.length > 1 ? 's' : ''} without a symbol and number: ${skipped.join('; ').slice(0, 120)}`);
-  return vars.map(v => ({ eq: v.latex }));
+  return Object.assign(vars, { skipped });
+}
+
+// Pasted variables go into a "Variables" section at the top (made if needed). A variable already set by a
+// plain "name = number" line anywhere is updated in place instead, so pasting the same table twice doesn't repeat it.
+function pasteVars(vars, from) {
+  const existing = new Map();
+  for (const w of doc.querySelectorAll('.eq')) {
+    const k = plainDefinition(w.firstChild.value);
+    if (k && !existing.has(k)) existing.set(k, w);
+  }
+  const fresh = [];
+  let updated = 0;
+  for (const v of vars) {
+    const w = existing.get(v.key);
+    if (!w) { fresh.push(v.latex); existing.set(v.key, true); continue; }
+    if (w === true) continue; // repeated within the same paste
+    if (w.firstChild.value !== v.latex) { w.firstChild.value = v.latex; delete w.dataset.base; updated++; }
+  }
+  if (fresh.length) {
+    let sec = [...doc.querySelectorAll('.section')].find(b => b.querySelector('h2').textContent.trim().toLowerCase() === 'variables');
+    if (!sec) { sec = makeSection('Variables'); doc.prepend(sec); }
+    let at = sectionOf(sec).at(-1);
+    if (at !== sec && at.classList.contains('eq') && !at.firstChild.value && at !== from) { const prev = at.previousElementSibling; at.remove(); at = prev; }
+    for (const latex of fresh) at = after(at, makeEq(latex));
+  }
+  // the empty line you pasted into isn't needed any more
+  if (from?.classList.contains('eq') && !from.firstChild.value && doc.children.length > 1) {
+    const next = from.nextElementSibling ?? from.previousElementSibling;
+    from.remove();
+    focusBlock(next, true);
+  }
+  schedule();
+  const same = vars.length - fresh.length - updated;
+  const skipped = vars.skipped?.length ? ` · skipped (no symbol and number): ${vars.skipped.join('; ').slice(0, 100)}` : '';
+  flash(`Variables: added ${fresh.length}${updated ? `, updated ${updated}` : ''}${same ? `, ${same} already there` : ''}` + (fresh.length ? ' in the Variables section at the top' : '') + skipped);
 }
 
 const universalList = () => settings.universals.split('\n').map(parseVarLine).filter(u => u?.key && u.number != null);
@@ -514,7 +548,7 @@ async function pasteVariables(ref = current) {
   if (!text?.trim()) return;
   const { vars, skipped } = parseVariables(text);
   if (skipped.length) alert(`These rows weren't understood and were skipped:\n${skipped.join('\n')}\n\nEach needs a symbol (like m, v0, C_L, ρ or theta) and a number.`);
-  if (vars.length) pasteBlocks(vars.map(v => ({ eq: v.latex })), ref?.isConnected ? ref : doc.lastElementChild);
+  if (vars.length) pasteVars(vars, ref?.isConnected ? ref : doc.lastElementChild);
 }
 
 async function editUniversals() {

@@ -1,7 +1,7 @@
 // Engine check: npm i @cortex-js/compute-engine@0.58.0 && node calc.test.mjs
 import assert from 'node:assert';
 import { ComputeEngine } from '@cortex-js/compute-engine';
-import { evaluateDocument, parseVarLine, parseVariables } from './calc.js';
+import { evaluateDocument, parseVarLine, parseVariables, plainDefinition } from './calc.js';
 const ce = new ComputeEngine();
 const run = (ls, dp = {}, w = true) => evaluateDocument(ce, ls.map((latex, i) => ({ id: i, latex })), dp, w);
 let r = run(['y=10', 'z=2', 'x=\\frac{y}{z}']);
@@ -40,6 +40,16 @@ const word = 'QUANTITY\tVALUE\tUNITS\nC_(l_(α_Wing ) )\t0.108\t1/deg\nc_Root\t1
 assert.deepEqual(eqs(word), ['C_{l_{\\alpha_{Wing}}}=0.108\\text{ 1/deg}', 'c_{Root}=125\\text{ mm}', '\\mathrm{AR}_{wing}=4.544',
   '\\frac{\\partial \\varepsilon}{\\partial \\alpha}=0.606\\text{ /rad}', '\\eta=0.9', 'S_{wing}=0.05425\\text{ m²}', 'I_{yy}=0.047\\text{ kg·m²}']);
 assert.deepEqual(parseVariables(word).skipped, []);
+// Word's maths letters and invisible characters: 𝜕𝜀/𝜕𝛼 (mathematical italic), ϵ, function-application mark
+for (const n of ['(𝜕𝜀)/(𝜕𝛼)', '(∂ϵ)/(∂α)', '(∂⁡ε)∕(∂α)', '𝜕𝜀/𝜕𝛼'])
+  assert.equal(parseVariables(`QUANTITY\tVALUE\tUNITS\n${n}\t0.606\t/rad`).vars[0]?.key, 'partialepsilon/partialalpha', n);
+assert.equal(parseVariables('Symbol\tValue\n𝑚\t5').vars[0].latex, 'm=5');
+// lines that just set a variable to a number (so a re-paste updates them)
+assert.equal(plainDefinition('m=1200\\text{ kg}'), 'm');
+assert.equal(plainDefinition('E=2.1\\times10^{-3}\\text{ Pa}'), 'E');
+assert.equal(plainDefinition('\\mathrm{AR}_{wing}=4.544'), 'AR_wing');
+assert.equal(plainDefinition('x=\\frac{y}{z}'), null);
+assert.equal(plainDefinition('10=2b'), null);
 // pasted names match what you type in an equation
 r = run(['\\mathrm{AR}_{wing}=4.5', 'C_{l_{\\alpha_{Wing}}}=0.1', '\\frac{\\partial\\varepsilon}{\\partial\\alpha}=0.6',
   'k=\\mathrm{AR}_{wing}\\cdot C_{l_{\\alpha_{Wing}}}\\left(1-\\frac{\\partial\\varepsilon}{\\partial\\alpha}\\right)']);

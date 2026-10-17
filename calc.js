@@ -188,7 +188,7 @@ function stripText(t) {
 }
 
 const GREEK_WORD = new RegExp(`^(${[...GREEK].map(g => g.slice(1)).join('|')}|pi)$`);
-const UNICODE_GREEK = { α: 'alpha', β: 'beta', γ: 'gamma', δ: 'delta', ε: 'epsilon', ζ: 'zeta', η: 'eta', θ: 'theta', ι: 'iota', κ: 'kappa',
+const UNICODE_GREEK = { ϵ: 'epsilon', ϑ: 'theta', ϕ: 'phi', α: 'alpha', β: 'beta', γ: 'gamma', δ: 'delta', ε: 'epsilon', ζ: 'zeta', η: 'eta', θ: 'theta', ι: 'iota', κ: 'kappa',
   λ: 'lambda', μ: 'mu', ν: 'nu', ξ: 'xi', π: 'pi', ρ: 'rho', σ: 'sigma', τ: 'tau', υ: 'upsilon', φ: 'phi', χ: 'chi', ψ: 'psi', ω: 'omega',
   Γ: 'Gamma', Δ: 'Delta', Θ: 'Theta', Λ: 'Lambda', Ξ: 'Xi', Π: 'Pi', Σ: 'Sigma', Φ: 'Phi', Ψ: 'Psi', Ω: 'Omega' };
 const SUB_DIGITS = '₀₁₂₃₄₅₆₇₈₉', SUP = { '⁰': 0, '¹': 1, '²': 2, '³': 3, '⁴': 4, '⁵': 5, '⁶': 6, '⁷': 7, '⁸': 8, '⁹': 9, '⁻': '-', '⁺': '+' };
@@ -213,14 +213,16 @@ const symbolOnly = nameLatex => {
 // "v0", "C_L", "CL", "AR_wing", "ρ", "theta", "C_(l_(α_Wing))", "(∂ε)/(∂α)" -> { nameLatex, key },
 // or null if it doesn't look like a symbol (e.g. a description)
 export function varName(cell) {
-  let s = cell.trim().replace(/^\$|\$$/g, '').replace(/\s+/g, '');
+  // NFKC turns Word's maths letters (𝜕 𝜀 𝛼 𝑚 ⅆ) into plain ones (∂ ε α m d); drop invisible formatting characters
+  let s = cell.normalize('NFKC').replace(/[\u2061-\u2064\u200B-\u200D\uFEFF]/g, '').replace(/[∕⁄]/g, '/')
+    .trim().replace(/^\$|\$$/g, '').replace(/\s+/g, '');
   const d = s.match(/^\(?([∂d])(.+?)\)?\/\(?\1(.+?)\)?$/);
   if (d) {
     const a = varName(d[2]), b = varName(d[3]), op = d[1] === '∂' ? '\\partial ' : 'd';
     return a && b ? symbolOnly(`\\frac{${op}${a.nameLatex}}{${op}${b.nameLatex}}`) : null;
   }
   s = subBraces(s)
-    .replace(/[α-ωΓ-Ω]/g, c => UNICODE_GREEK[c] ? '\\' + (c === 'ε' ? 'varepsilon' : UNICODE_GREEK[c]) + ' ' : c)
+    .replace(/[α-ωΓ-Ωϵϑϕ]/g, c => UNICODE_GREEK[c] ? '\\' + (c === 'ε' ? 'varepsilon' : UNICODE_GREEK[c]) + ' ' : c)
     .replace(/[₀-₉]+/g, n => '_' + [...n].map(c => SUB_DIGITS.indexOf(c)).join(''))
     .replace(/ (?=[_}]|$)/g, '')
     .replace(/_([A-Za-z0-9]{2,})/g, '_{$1}'); // α_Wing -> α_{Wing} so the whole word is lowered
@@ -285,6 +287,14 @@ function parseTable(rows) {
     if (v && v.number != null) vars.push(v); else skipped.push(r.join('  '));
   }
   return { vars, skipped };
+}
+
+// The variable a line like "m=5\\text{ kg}" sets to a plain number, or null (used to update rather than repeat
+// variables when a table is pasted again)
+export function plainDefinition(latex) {
+  const t = tokenize(latex), { occ } = scan(t), eq = t.indexOf('=');
+  if (occ[0]?.start !== 0 || occ[0].end !== eq) return null;
+  return /^-?[\d.]+(\\times ?10\^\{-?\d+\})?(\\text\{[^}]*\})?$/.test(join(t.slice(eq + 1))) ? occ[0].name : null;
 }
 
 // Pasted text -> { vars, skipped }. Handles "name = value" lines and tables from Excel/Word/web (tab separated)
