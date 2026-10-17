@@ -81,6 +81,16 @@ assert.deepEqual(eqs(xl), ['\\mathrm{Temp}=290.15\\text{ K}', '\\mathrm{Pressure
 assert.deepEqual(parseVariables(xl).skipped, []);
 r = run(['\\mathrm{Pressure}=101690\\text{ Pa}', 'R=287\\text{ J/kg·K}', '\\mathrm{Temp}=290.15\\text{ K}', '\\rho=\\frac{Pressure}{RTemp}']);
 assert.equal(r.ghosts[3], '=\\frac{101690}{287\\cdot 290.15}=1.22116339\\text{ Pa·kg/J}'); // typed words match; units combine
+// partly known: fill in what's known, simplify, leave unknowns (when the line ends with =)
+r = run(['\\lambda=0.752', '\\bar{c}=\\frac{2}{3}c_{r}\\frac{1+\\lambda+\\lambda^{2}}{1+\\lambda}=']);
+assert.equal(r.ghosts[1], '\\frac{2}{3}c_{r}\\frac{1+0.752+0.752^{2}}{1+0.752}=0.8818508374c_{r}');
+assert.equal(r.vars.get('c_bar'), undefined);
+assert.equal(run(['g=9.81', 'v=\\sqrt{2gh}=']).ghosts[1], '\\sqrt{2\\cdot 9.81h}=\\sqrt{19.62h}');
+assert.equal(run(['x=4y+3y-2+5=']).ghosts[0], '7y+3');
+assert.equal(run(['x=4y=']).ghosts[0], undefined); // nothing to fill in
+// c̄ is its own variable and matches c_bar from a table
+r = run(['c_{bar}=0.1102\\text{ m}', 'w=2\\bar{c}']);
+assert.equal(r.vars.get('w').value, 0.2204);
 assert.deepEqual(parseVariables('Symbol\tValue\nm\t5\nTotal\tTBC').skipped, ['Total  TBC']);
 // units are ignored in maths; universal constants are known from the start and can be overridden
 r = run(['m=5\\text{ kg}', 'F=mg']);

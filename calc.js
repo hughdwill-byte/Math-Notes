@@ -55,9 +55,20 @@ function splitTop(t, seps) {
 // ponytail: module-level state; pass it through if scanning ever runs for two documents at once
 let MULTI = [];
 
+const ACCENTS = { '\\bar': 'bar', '\\overline': 'bar', '\\hat': 'hat', '\\dot': 'dot', '\\ddot': 'ddot', '\\vec': 'vec', '\\tilde': 'tilde' };
+
 function symbolAt(t, i) {
   const tk = t[i];
   let end, name;
+  // c̄ (\bar{c}) is its own variable, the same one as c_bar from a pasted table
+  if (ACCENTS[tk]) {
+    const ge = groupEnd(t, i + 1), inner = t[i + 1] === '{' ? t.slice(i + 2, ge - 1) : t.slice(i + 1, ge), s = symbolAt(inner, 0);
+    if (!s || s.end !== inner.length) return null;
+    [end, name] = [ge, `${s.name}_${ACCENTS[tk]}`];
+    let latex = join(t.slice(i, end));
+    if (t[end] === '_') { const se = groupEnd(t, end + 1), sub = t.slice(end + 1, se); name += join(sub[0] === '{' ? sub.slice(1, -1) : sub).replace(/\\/g, ''); latex += join(t.slice(end, se)); end = se; }
+    return { end, name, latex };
+  }
   const multi = /^[a-zA-Z]$/.test(tk) && MULTI.find(m => t.slice(i, i + m.length).join('') === m);
   if (multi) [end, name] = [i + multi.length, multi];
   else if (/^[a-zA-Z]$/.test(tk)) [end, name] = [i + 1, tk];
@@ -202,6 +213,64 @@ function unitOfJson(x, sym) {
     case 'Negate': case 'Abs': case 'Delimiter': case 'Parentheses': case 'Plus': return unitOfJson(args[0], sym);
     case 'Rational': return {};
     default: return {}; // sin, ln, exp, constants...: no unit
+  }
+}
+
+// ---------- partly known expressions ----------
+// Work out every fully numeric part of a MathJSON expression, combining numbers in products and sums,
+// and leave the unknowns alone: 2/3·c_r·(1+0.752+0.752²)/(1+0.752) -> 0.8818508374·c_r
+const isNum = x => typeof x === 'number';
+const hasSym = x => (typeof x === 'string' ? !['Pi', 'ExponentialE'].includes(x) : Array.isArray(x) && x.slice(1).some(hasSym));
+const round10 = v => Number(v.toPrecision(10));
+function fold(ce, x) {
+  if (!Array.isArray(x)) return x;
+  if (!hasSym(x)) { const v = toNumber(ce.box(x).N()); return v == null ? x : round10(v); }
+  const [h, ...a] = x, args = a.map(y => fold(ce, y));
+  if (h === 'Multiply' || h === 'Add') {
+    const nums = args.filter(isNum);
+    let rest = args.filter(y => !isNum(y));
+    if (h === 'Add') {
+      // like terms: 3y + 4y -> 7y
+      const terms = new Map();
+      for (const y of rest) {
+        const [c, ...f] = Array.isArray(y) && y[0] === 'Multiply' && isNum(y[1]) ? [y[1], ...y.slice(2)] : [1, y];
+        const key = JSON.stringify(f);
+        terms.set(key, { c: (terms.get(key)?.c ?? 0) + c, f });
+      }
+      rest = [...terms.values()].filter(t => t.c !== 0).map(({ c, f }) => {
+        const body = f.length === 1 ? f[0] : ['Multiply', ...f];
+        return c === 1 ? body : ['Multiply', round10(c), ...f];
+      });
+    }
+    const k = round10(h === 'Multiply' ? nums.reduce((p, n) => p * n, 1) : nums.reduce((p, n) => p + n, 0));
+    const unit = h === 'Multiply' ? 1 : 0;
+    if (h === 'Multiply' && k === 0) return 0;
+    const out = k === unit ? rest : h === 'Multiply' ? [k, ...rest] : [...rest, k];
+    return out.length === 1 ? out[0] : [h, ...out];
+  }
+  return [h, ...args];
+}
+
+// MathJSON -> LaTeX for the shapes fold produces; back maps placeholder symbols to the original LaTeX
+function toLatex(ce, x, back, inner = false) {
+  const t = y => toLatex(ce, y, back, true), wrap = y => (Array.isArray(y) && ['Add', 'Subtract'].includes(y[0]) ? `\\left(${t(y)}\\right)` : t(y));
+  if (isNum(x)) { const s = formatNumber(x, null); return inner && x < 0 ? `\\left(${s}\\right)` : s; }
+  if (typeof x === 'string') return back[x] ?? ({ Pi: '\\pi', ExponentialE: 'e' }[x] ?? x);
+  const [h, ...a] = x;
+  switch (h) {
+    case 'Add': return a.map((y, i) => { const s = toLatex(ce, y, back); return i && !/^-/.test(s) ? '+' + s : s; }).join('');
+    case 'Subtract': return `${t(a[0])}-${wrap(a[1])}`;
+    case 'Negate': return `-${wrap(a[0])}`;
+    case 'Multiply': return a.map(wrap).reduce((s, f, i) => s + (i && (/^[\d.]/.test(f) || /\d$/.test(s) && /^\d/.test(f)) ? '\\cdot ' : '') + f, '');
+    case 'Divide': case 'Rational': return `\\frac{${toLatex(ce, a[0], back)}}{${toLatex(ce, a[1], back)}}`;
+    case 'Power': return `${Array.isArray(a[0]) || (isNum(a[0]) && a[0] < 0) ? `\\left(${t(a[0])}\\right)` : t(a[0])}^{${toLatex(ce, a[1], back)}}`;
+    case 'Sqrt': return `\\sqrt{${toLatex(ce, a[0], back)}}`;
+    case 'Root': return `\\sqrt[${toLatex(ce, a[1], back)}]{${toLatex(ce, a[0], back)}}`;
+    case 'Delimiter': return `\\left(${toLatex(ce, a[0], back)}\\right)`;
+    default: {
+      const s = ce.box(x, { canonical: false }).latex.replace(/\\,/g, '');
+      return s.replace(/\\mathrm\{(qq[a-z]+)\}|\b(qq[a-z]+)\b/g, (m, p1, p2) => back[p1 ?? p2] ?? m);
+    }
   }
 }
 
@@ -471,6 +540,27 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
           const num = withUnit(formatNumber(value, null), unitOf(parts[0]));
           ghost = showWorking && scans[0].occ.length ? `${join(substitute(parts[0], scans[0].occ, vals()))}=${num}` : num;
         }
+        continue;
+      }
+
+      // "... =" with unknowns left: fill in what's known, work out what can be, leave the unknowns as they are
+      const src = trailingEmpty && (rest.length ? rest.at(-1) : !target && parts.length === 2 ? { p: parts[0], s: scans[0] } : null);
+      if (src && unknownsIn(src.s).length) {
+        const names = [...new Set(src.s.occ.map(o => o.name))];
+        const ph = {}, back = {};
+        names.forEach((n, i) => {
+          if (vars.has(n)) return;
+          const p = 'qq' + String.fromCharCode(97 + Math.floor(i / 26)) + String.fromCharCode(97 + i % 26);
+          ph[n] = `\\mathrm{${p}}`;
+          back[p] = src.s.occ.find(o => o.name === n).latex;
+        });
+        try {
+          const withNumbers = join(substitute(src.p, src.s.occ, vals()));
+          const simplified = toLatex(ce, fold(ce, ce.parse(join(substitute(src.p, src.s.occ, { ...vals(), ...ph })), { canonical: false }).json), back);
+          const steps = [showWorking && src.s.occ.some(o => vars.has(o.name)) ? withNumbers : null, simplified]
+            .filter((x, i, l) => x && x !== join(src.p) && x !== l[i - 1]);
+          if (steps.length) ghost = steps.join('=');
+        } catch {}
         continue;
       }
 
