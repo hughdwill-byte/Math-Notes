@@ -16,6 +16,6 @@ An equations-only notebook in a Word-style window, hosted on GitHub Pages.
 - Decimal places per variable: the Variables pane dropdowns or the Increase/Decrease Decimal buttons.
 - **Symbols panel** (left of the page): structures (fractions, roots, integrals, matrices…), Greek letters, calculus, arrows, sets and geometry symbols. Click to insert. View → Symbols shows/hides it.
 - Copying for Word: **right-click any line → Copy section**, or click a section heading and press **Ctrl+C**, to copy that heading and its equations. Ctrl+C in an equation copies that equation; Home → Copy all copies everything. Equations paste into Word as real Word equations.
-- **Projects** (File menu or folder button): create, name, rename, switch and delete separate projects; each saves automatically in the browser. Save/open a project as a `.mathnotes` file to move it between computers.
+- **Projects** (File menu or folder button): create, name, rename, switch and delete separate projects; each saves automatically in the browser. **Ctrl+S** saves the project to a `.mathnotes` file: the first time you pick where, after that it overwrites the same file (Chrome/Edge; other browsers download a new copy each time). File → Save as… picks a new file; opening a project's file again updates that project instead of making a copy.
 
 To publish: repo Settings → Pages → Deploy from a branch → pick this branch, folder `/ (root)`.

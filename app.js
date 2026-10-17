@@ -355,33 +355,92 @@ function renameProject() {
   const n = uniqueName(name);
   projects[n] = projects[project];
   delete projects[project];
+  getHandle(project).then(h => { setHandle(n, h); setHandle(project, null); });
   openProject(n);
 }
 
 function deleteProject() {
   if (!confirm(`Delete the project "${project}"? This cannot be undone.`)) return;
   delete projects[project];
+  setHandle(project, null);
   if (!Object.keys(projects).length) projects.Untitled = { blocks: [], dp: {} };
   openProject(Object.keys(projects)[0]);
 }
 
-function download() {
-  const blob = new Blob([JSON.stringify({ blocks: serialize(), dp: dpOf() })], { type: 'application/json' });
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: project + '.mathnotes' });
-  a.click();
-  URL.revokeObjectURL(a.href);
+// Each project remembers the file it was saved to / opened from (kept in IndexedDB), so Save overwrites it.
+// Needs the File System Access API (Chrome, Edge); other browsers can only download a new copy.
+const idb = new Promise(res => {
+  try {
+    const r = indexedDB.open('mathnotes', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('handles');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => res(null);
+  } catch { res(null); }
+});
+async function handles(mode, fn) {
+  const db = await idb;
+  if (!db) return;
+  return new Promise(res => {
+    try {
+      const tx = db.transaction('handles', mode), req = fn(tx.objectStore('handles'));
+      tx.oncomplete = () => res(req.result);
+      tx.onerror = () => res();
+    } catch { res(); }
+  });
+}
+const liveHandles = {}; // this session's handles, in case IndexedDB is unavailable
+const getHandle = async n => liveHandles[n] ?? handles('readonly', s => s.get(n));
+const setHandle = (n, h) => { if (h) liveHandles[n] = h; else delete liveHandles[n]; return handles('readwrite', s => (h ? s.put(h, n) : s.delete(n))); };
+const FILE_TYPES = [{ description: 'Math Notes project', accept: { 'application/json': ['.mathnotes'] } }];
+
+function flash(msg) {
+  $('#save-status').textContent = msg;
+  clearTimeout(flash.t);
+  flash.t = setTimeout(() => { $('#save-status').textContent = ''; }, 4000);
 }
 
-$('#open-file').addEventListener('change', async e => {
-  const f = e.target.files[0];
-  if (!f) return;
+async function saveFile(saveAs = false) {
+  const data = JSON.stringify({ blocks: serialize(), dp: dpOf(), off: offList() });
+  if (!window.showSaveFilePicker) {
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([data], { type: 'application/json' })), download: project + '.mathnotes' });
+    a.click();
+    URL.revokeObjectURL(a.href);
+    return;
+  }
+  try {
+    let h = saveAs ? null : await getHandle(project);
+    if (h && (await h.queryPermission({ mode: 'readwrite' })) !== 'granted' && (await h.requestPermission({ mode: 'readwrite' })) !== 'granted') h = null;
+    h ||= await showSaveFilePicker({ suggestedName: project + '.mathnotes', types: FILE_TYPES });
+    const w = await h.createWritable();
+    await w.write(data);
+    await w.close();
+    await setHandle(project, h);
+    flash(`Saved to ${h.name}`);
+  } catch (e) { if (e.name !== 'AbortError') alert('Could not save the file: ' + e.message); }
+}
+
+async function openFile() {
+  if (!window.showOpenFilePicker) return $('#open-file').click();
+  try {
+    const [h] = await showOpenFilePicker({ types: FILE_TYPES });
+    loadFile(await h.getFile(), h);
+  } catch (e) { if (e.name !== 'AbortError') alert('Could not open the file: ' + e.message); }
+}
+
+async function loadFile(f, handle) {
   try {
     const data = JSON.parse(await f.text());
-    const blocks = data.blocks ?? fromHtml(data.html ?? '');
-    const n = uniqueName(f.name.replace(/\.mathnotes$/i, ''));
-    projects[n] = { blocks, dp: data.dp ?? {} };
+    const name = f.name.replace(/\.mathnotes$/i, '').trim() || 'Untitled';
+    // opening the same project's file again updates that project instead of making a copy
+    const n = projects[name] && confirm(`Replace the project "${name}" with this file?\n\nCancel opens it as a separate copy.`) ? name : uniqueName(name);
+    projects[n] = { blocks: data.blocks ?? fromHtml(data.html ?? ''), dp: data.dp ?? {}, off: data.off ?? [] };
+    if (handle) await setHandle(n, handle);
     openProject(n);
   } catch { alert('That file could not be opened. Choose a .mathnotes file saved from Math Notes.'); }
+}
+
+$('#open-file').addEventListener('change', e => {
+  if (e.target.files[0]) loadFile(e.target.files[0]);
   e.target.value = '';
 });
 
@@ -477,7 +536,7 @@ const actions = {
   accept: () => accept(),
   dpUp: () => bumpDp(1),
   dpDown: () => bumpDp(-1),
-  save: download,
+  save: () => saveFile(),
   print: () => print(),
   togglePane: () => { $('#pane').hidden = !$('#pane').hidden; },
   toggleSymbols: () => { $('#sympane').hidden = !$('#sympane').hidden; },
@@ -485,8 +544,9 @@ const actions = {
     ['note_add', 'New project…', newProject],
     ['edit', 'Rename project…', renameProject],
     ['delete', 'Delete project…', deleteProject],
-    ['download', 'Save project to a file', download],
-    ['upload', 'Open project from a file…', () => $('#open-file').click()],
+    ['save', 'Save (Ctrl+S)', () => saveFile()],
+    ['save_as', 'Save as…', () => saveFile(true)],
+    ['upload', 'Open from a file…', openFile],
     ['content_copy', 'Copy all for Word', copyAll],
     ['print', 'Print', () => print()],
     ...Object.keys(projects).sort().map(n => [n === project ? 'check' : 'description', esc(n), () => openProject(n)]),
@@ -611,7 +671,7 @@ $('#symbols').addEventListener('click', e => {
 });
 
 document.addEventListener('keydown', e => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); download(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveFile(e.shiftKey); }
   if (e.altKey && e.key === '=') { e.preventDefault(); addEq(); }
   if (e.key === 'Escape') closeMenu();
 });
