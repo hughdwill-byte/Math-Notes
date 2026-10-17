@@ -82,7 +82,7 @@
   .label h3:empty::before { content: "Label"; color: #a19f9d; font-weight: 400; }
 
   /* variables pane */
-  #pane { width: 280px; background: #fff; border-left: 1px solid var(--line); display: flex; flex-direction: column; flex: none; }
+  #pane { width: 340px; background: #fff; border-left: 1px solid var(--line); display: flex; flex-direction: column; flex: none; }
   #pane[hidden], #sympane[hidden] { display: none; }
   #sympane { width: 248px; background: #fff; border-right: 1px solid var(--line); display: flex; flex-direction: column; flex: none; }
   #symbols { overflow: auto; padding: 0 8px 16px; }
@@ -104,6 +104,10 @@
   #vars td:first-child:hover { background: var(--hover); }
   #vars select { font: inherit; height: 24px; }
   #vars .unit { color: var(--muted); font-size: 12px; }
+  #vars .unit-in { font: inherit; font-size: 12px; width: 76px; border: 1px solid transparent; border-radius: 2px; padding: 2px 4px; background: transparent; color: var(--muted); }
+  #vars .unit-in:hover, #vars .unit-in:focus { border-color: var(--line); background: #fff; color: var(--text); }
+  #vars .unit-in.set { color: var(--text); font-weight: 600; }
+  #vars .unit-in::placeholder { color: #c8c6c4; }
   #vars h4 { display: flex; align-items: center; justify-content: space-between; margin: 18px 4px 2px; font-size: 13px; }
   #vars h4 button { font-weight: 400; color: var(--brand); }
   #vars .hint { padding: 0 4px 6px; }

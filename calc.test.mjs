@@ -1,7 +1,7 @@
 // Engine check: npm i @cortex-js/compute-engine@0.58.0 && node calc.test.mjs
 import assert from 'node:assert';
 import { ComputeEngine } from '@cortex-js/compute-engine';
-import { evaluateDocument, parseVarLine, parseVariables, plainDefinition } from './calc.js';
+import { evaluateDocument, parseVarLine, parseVariables, plainDefinition, formatUnit, convertValue, parseUnit } from './calc.js';
 const ce = new ComputeEngine();
 const run = (ls, dp = {}, w = true) => evaluateDocument(ce, ls.map((latex, i) => ({ id: i, latex })), dp, w);
 let r = run(['y=10', 'z=2', 'x=\\frac{y}{z}']);
@@ -91,6 +91,28 @@ assert.equal(run(['x=4y=']).ghosts[0], undefined); // nothing to fill in
 // c̄ is its own variable and matches c_bar from a table
 r = run(['c_{bar}=0.1102\\text{ m}', 'w=2\\bar{c}']);
 assert.equal(r.vars.get('w').value, 0.2204);
+// units chosen in the Variables pane win, and flow on; suggestions come from the equations
+r = evaluateDocument(ce, ['F=600\\text{ N}', 'm=1200', 'a=0.5', 'F=ma', 'x=2m'].map((latex, id) => ({ id, latex })), {}, true, [], { m: 'kg' });
+assert.equal(formatUnit(r.vars.get('m').unit), 'kg');
+assert.equal(formatUnit(r.vars.get('x').unit), 'kg');
+assert.deepEqual(r.suggest.a, ['N/kg']);
+r = run(['L=1200\\text{ N}', 'q=500\\text{ Pa}', 'C=0.4', 'S=3', 'L=qSC']); // a pasted S with no unit
+assert.deepEqual(r.suggest.S, ['N/Pa']); // = m²
+// unit conversion
+const cv = (v, a, b) => convertValue(v, parseUnit(a), parseUnit(b));
+assert.equal(cv(125, 'mm', 'm'), 0.125);
+assert.ok(Math.abs(cv(0.108, '1/deg', '1/rad') - 6.188) < 1e-3);
+assert.ok(Math.abs(cv(25, 'm/s', 'km/h') - 90) < 1e-9);
+assert.equal(cv(1, 'kN·m', 'N·m'), 1000);
+assert.ok(Math.abs(cv(101690, 'Pa', 'kPa') - 101.69) < 1e-9);
+assert.ok(Math.abs(cv(1, 'J', 'kg·m²/s²') - 1) < 1e-12);
+assert.equal(cv(20, '°C', 'K'), 293.15);
+assert.equal(cv(5, 'mm', 'kg'), null);
+// a computed variable shown in another unit: value converted on the page and for later lines
+r = evaluateDocument(ce, ['C_{l}=0.108\\text{ 1/deg}', 'C_{L}=C_{l}\\cdot 2=', 'k=C_{L}\\cdot 1'].map((latex, id) => ({ id, latex })), {}, true, [], { C_L: '1/rad' });
+assert.ok(Math.abs(r.vars.get('C_L').value - 12.376) < 1e-3);
+assert.match(r.ghosts[1], /=12\.37\d+\\text\{ 1\/rad\}$/);
+assert.ok(Math.abs(r.vars.get('k').value - 12.376) < 1e-3);
 assert.deepEqual(parseVariables('Symbol\tValue\nm\t5\nTotal\tTBC').skipped, ['Total  TBC']);
 // units are ignored in maths; universal constants are known from the start and can be overridden
 r = run(['m=5\\text{ kg}', 'F=mg']);

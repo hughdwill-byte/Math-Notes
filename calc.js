@@ -179,6 +179,35 @@ const powU = (a, p) => clean(Object.fromEntries(Object.entries(a).map(([n, e]) =
 const ANGLE = /^(deg|rad|°)$/;
 const noAngles = u => Object.fromEntries(Object.entries(u).filter(([n]) => !ANGLE.test(n)));
 
+// Conversions: each unit as a factor times SI base dimensions (angles get their own "rad" dimension so
+// deg <-> rad converts). Units not listed only match themselves.
+const SI = (f, d) => [f, d];
+const L = { m: 1 }, M = { kg: 1 }, T = { s: 1 }, F = { kg: 1, m: 1, s: -2 }, P = { kg: 1, m: -1, s: -2 }, E = { kg: 1, m: 2, s: -2 }, W = { kg: 1, m: 2, s: -3 };
+const UNITS = {
+  m: SI(1, L), mm: SI(1e-3, L), cm: SI(1e-2, L), km: SI(1e3, L), µm: SI(1e-6, L), μm: SI(1e-6, L), um: SI(1e-6, L), in: SI(0.0254, L), ft: SI(0.3048, L), mi: SI(1609.344, L), nmi: SI(1852, L),
+  kg: SI(1, M), g: SI(1e-3, M), mg: SI(1e-6, M), t: SI(1e3, M), lb: SI(0.45359237, M),
+  s: SI(1, T), ms: SI(1e-3, T), min: SI(60, T), h: SI(3600, T), hr: SI(3600, T),
+  N: SI(1, F), kN: SI(1e3, F), MN: SI(1e6, F), lbf: SI(4.4482216152605, F),
+  Pa: SI(1, P), kPa: SI(1e3, P), MPa: SI(1e6, P), GPa: SI(1e9, P), bar: SI(1e5, P), mbar: SI(100, P), psi: SI(6894.757293168, P), atm: SI(101325, P),
+  J: SI(1, E), kJ: SI(1e3, E), MJ: SI(1e6, E), Wh: SI(3600, E), kWh: SI(3.6e6, E), W: SI(1, W), kW: SI(1e3, W), MW: SI(1e6, W), hp: SI(745.69987158, W),
+  Hz: SI(1, { s: -1 }), L: SI(1e-3, { m: 3 }), mL: SI(1e-6, { m: 3 }), kn: SI(1852 / 3600, { m: 1, s: -1 }), mph: SI(0.44704, { m: 1, s: -1 }),
+  rad: SI(1, { rad: 1 }), deg: SI(Math.PI / 180, { rad: 1 }), '°': SI(Math.PI / 180, { rad: 1 }),
+  K: SI(1, { K: 1 }), '°C': SI(1, { K: 1 }), A: SI(1, { A: 1 }), V: SI(1, { ...W, A: -1 }), Ω: SI(1, { kg: 1, m: 2, s: -3, A: -2 }),
+};
+function toSI(u) {
+  let f = 1, d = {};
+  for (const [n, e] of Object.entries(u)) { const [k, dims] = UNITS[n] ?? [1, { [n]: 1 }]; f *= k ** e; d = mulU(d, dims, e); }
+  return [f, d];
+}
+// value in unit `from` expressed in unit `to`, or null if they measure different things
+export function convertValue(v, from, to) {
+  const only = (u, n) => Object.keys(u).length === 1 && u[n] === 1;
+  if (only(from, '°C') && only(to, 'K')) return v + 273.15;
+  if (only(from, 'K') && only(to, '°C')) return v - 273.15;
+  const [a, da] = toSI(from), [b, db] = toSI(to);
+  return sameUnit(da, db) ? v * a / b : null;
+}
+
 export function formatUnit(u) {
   if (!u) return '';
   const pow = e => (e === 1 ? '' : Number.isInteger(e) ? String(e).replace(/-/, '⁻').replace(/\d/g, d => SUPS[d]) : '^' + e);
@@ -473,14 +502,22 @@ export function parseVariables(text) {
 }
 
 // Walk the equations in document order. eqs: [{id, latex}]; dp: {name: places};
-// initial: [{key, latex, value}] variables known before the first line (universal constants).
-// Returns { vars: Map name -> {value, latex, id}, ghosts: {id: latex to append} }
-export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
+// initial: [{key, latex, value, unit}] variables known before the first line (universal constants);
+// unitOverrides: {name: unit text} units chosen in the Variables pane, which win over worked-out ones.
+// Returns { vars: Map name -> {value, latex, id, unit}, ghosts: {id: latex to append}, suggest: {name: [unit text]} }
+export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOverrides = {}) {
   const all = [...eqs, ...initial].map(e => e.latex).join(' ');
   MULTI = [...new Set([...all.matchAll(/\\(?:mathrm|operatorname)\{([A-Za-z]{2,})\}/g)].map(m => m[1]))].sort((a, b) => b.length - a.length);
-  const vars = new Map(initial.map(u => [u.key, { value: u.value, latex: u.latex, id: 'universal', unit: parseUnit(u.unit) }])), ghosts = {};
+  // a unit chosen in the Variables pane: converts the value when it can, otherwise just relabels
+  const chosen = (name, value, unit) => {
+    if (unitOverrides[name] == null) return { value, unit };
+    const to = parseUnit(unitOverrides[name]), v = Object.keys(unit).length ? convertValue(value, unit, to) : null;
+    return { value: v ?? value, unit: to };
+  };
+  const vars = new Map(initial.map(u => [u.key, { latex: u.latex, id: 'universal', ...chosen(u.key, u.value, parseUnit(u.unit)) }])), ghosts = {};
   const vals = () => Object.fromEntries([...vars].map(([k, v]) => [k, formatNumber(v.value, dp[k])]));
   const set = (name, latex, value, id, unit = {}) => {
+    ({ value, unit } = chosen(name, value, unit));
     if (dp[name] != null) value = Number(value.toFixed(dp[name]));
     vars.set(name, { value, latex, id, unit });
   };
@@ -490,6 +527,23 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
     const ph = Object.fromEntries(names.map((n, i) => [n, `\\mathrm{qq${String.fromCharCode(97 + Math.floor(i / 26))}${String.fromCharCode(97 + i % 26)}}`]));
     const back = Object.fromEntries(names.map(n => [ph[n].slice(8, -1), n]));
     try { return unitOfJson(ce.parse(join(substitute(t, occ, ph)), { canonical: false }).json, s => back[s] ? extra[back[s]] ?? vars.get(back[s])?.unit ?? {} : {}); } catch { return null; }
+  };
+  // Unit suggestions: wherever a variable appears in an equation, the unit that would make both sides match,
+  // using the units known at that line (unknown ones count as no unit, so it's a closest fit). Most common first.
+  const counts = {};
+  const suggestFrom = parts => {
+    parts = parts.filter(p => p.length);
+    parts.forEach((P, i) => {
+      const otherUnits = parts.filter((_, j) => j !== i).map(Q => unitOf(Q)).filter(u => u && Object.keys(u).length);
+      if (!otherUnits.length) return;
+      for (const name of new Set(scan(P).occ.map(o => o.name))) {
+        const probe = unitOf(P, { [name]: { '#': 1 } }), p = probe?.['#'];
+        if (!p) continue;
+        const rest = Object.fromEntries(Object.entries(probe).filter(([n]) => n !== '#'));
+        const text = formatUnit(powU(mulU(otherUnits[0], rest, -1), 1 / p));
+        if (text) (counts[name] ??= {})[text] = (counts[name][text] ?? 0) + 1;
+      }
+    });
   };
   const withUnit = (num, u) => (u && Object.keys(u).length ? `${num}\\text{ ${formatUnit(u)}}` : num);
   const evalTokens = (t, extra = {}) => {
@@ -506,6 +560,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
       ghost = '';
       const parts = splitTop(st, SPLIT_PART);
       if (parts.length < 2) continue;
+      suggestFrom(parts);
       const scans = parts.map(scan);
       const unknownsIn = s => s.occ.filter(o => !vars.has(o.name));
       const p0 = scans[0].occ;
@@ -528,7 +583,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
           set(target.name, target.latex, value, id, unit ?? {});
           if (last && !unknownsIn(last.s).length && !PLAIN_NUMBER.test(join(last.p))) {
             const pre = trailingEmpty ? '' : '=';
-            const num = withUnit(formatNumber(vars.get(target.name).value, dp[target.name]), unit);
+            const num = withUnit(formatNumber(vars.get(target.name).value, dp[target.name]), vars.get(target.name).unit);
             ghost = showWorking && last.s.occ.length ? `${pre}${join(substitute(last.p, last.s.occ, vals()))}=${num}` : pre + num;
           }
           continue;
@@ -589,9 +644,10 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
       const probe = unitOf(a.p, { [u]: { '#': 1 } }), other = typedUnit != null && b === nonEmpty.at(-1) ? parseUnit(typedUnit) : unitOf(b.p);
       const p = probe?.['#'], unit = p && other ? powU(mulU(other, Object.fromEntries(Object.entries(probe).filter(([n]) => n !== '#')), -1), 1 / p) : {};
       set(u, uLatex, root, id, unit);
-      ghost = `\\Rightarrow ${uLatex}=${withUnit(formatNumber(vars.get(u).value, dp[u]), unit)}`;
+      ghost = `\\Rightarrow ${uLatex}=${withUnit(formatNumber(vars.get(u).value, dp[u]), vars.get(u).unit)}`;
     }
     if (ghost) ghosts[id] = ghost;
   }
-  return { vars, ghosts };
+  const suggest = Object.fromEntries(Object.entries(counts).map(([n, c]) => [n, Object.keys(c).sort((a, b) => c[b] - c[a])]));
+  return { vars, ghosts, suggest };
 }

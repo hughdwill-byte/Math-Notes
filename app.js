@@ -1,6 +1,6 @@
 import { MathfieldElement, convertLatexToMarkup, convertLatexToMathMl } from 'https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.mjs';
 import { ComputeEngine } from 'https://cdn.jsdelivr.net/npm/@cortex-js/compute-engine@0.58.0/dist/compute-engine.min.esm.js';
-import { evaluateDocument, formatNumber, formatUnit, parseVarLine, parseVariables, plainDefinition } from './calc.js';
+import { evaluateDocument, formatNumber, formatUnit, parseUnit, convertValue, parseVarLine, parseVariables, plainDefinition } from './calc.js';
 
 const ce = new ComputeEngine();
 const $ = s => document.querySelector(s);
@@ -34,11 +34,12 @@ const projects = load(PROJECTS, null) ?? {
 delete settings.dp;
 let project = projects[load(CURRENT, '')] ? load(CURRENT, '') : Object.keys(projects)[0];
 const dpOf = () => projects[project].dp;
+const unitsOf = () => (projects[project].units ??= {}); // units chosen in the Variables pane
 
 MathfieldElement.soundsDirectory = null;
 
 // The document is a list of blocks: equation lines (.eq) and sections (.section = line + heading).
-let seq = 0, current = null, result = { vars: new Map(), ghosts: {} };
+let seq = 0, current = null, result = { vars: new Map(), ghosts: {}, suggest: {} };
 const blocks = () => [...doc.children];
 const lastEq = () => (current?.isConnected && current.classList.contains('eq') ? current : null);
 
@@ -232,7 +233,7 @@ function schedule() { clearTimeout(timer); timer = setTimeout(recompute, 200); }
 function recompute() {
   // ponytail: re-evaluates the whole document each time; cache per equation if documents get huge
   const eqs = [...doc.querySelectorAll('.eq')];
-  result = evaluateDocument(ce, eqs.map(w => ({ id: w.dataset.id, latex: w.dataset.base ?? w.firstChild.value })), dpOf(), settings.showWorking, universals());
+  result = evaluateDocument(ce, eqs.map(w => ({ id: w.dataset.id, latex: w.dataset.base ?? w.firstChild.value })), dpOf(), settings.showWorking, universals(), unitsOf());
   for (const w of eqs) {
     let g = result.ghosts[w.dataset.id] || '';
     if (w.dataset.base != null) {
@@ -258,7 +259,7 @@ function recompute() {
 }
 
 function saveProject() {
-  projects[project] = { blocks: serialize(), dp: dpOf(), off: offList() };
+  projects[project] = { blocks: serialize(), dp: dpOf(), off: offList(), units: unitsOf() };
   store(PROJECTS, projects);
   store(CURRENT, project);
 }
@@ -313,12 +314,21 @@ const universalList = () => settings.universals.split('\n').map(parseVarLine).fi
 const offList = () => (projects[project].off ??= []);
 const universals = () => universalList().filter(u => !offList().includes(u.key)).map(u => ({ key: u.key, latex: u.nameLatex, value: u.number, unit: u.unit }));
 
+const COMMON_UNITS = 'm mm cm km s min h kg g N kN Pa kPa MPa J kJ W kW m/s m/s² km/h kg/m³ m² m³ N·m rad deg 1/rad 1/deg K °C A V Ω Hz'.split(' ');
+
 function renderVars() {
-  const rows = [...result.vars].filter(([, v]) => v.id !== 'universal').map(([name, v]) => {
+  const docUnits = [...new Set([...result.vars.values()].map(v => formatUnit(v.unit)).filter(Boolean))];
+  const rows = [...result.vars].filter(([, v]) => v.id !== 'universal').map(([name, v], i) => {
     const dp = dpOf()[name];
     const opts = ['<option value="">Auto</option>', ...Array.from({ length: 11 }, (_, i) => `<option${dp === i ? ' selected' : ''}>${i}</option>`)].join('');
+    // unit box: type your own or pick; equation-based suggestions first, then units in this document, then common ones
+    const fits = result.suggest[name] ?? [];
+    const list = [...fits.map(u => `<option value="${esc(u)}" label="fits the equations">`),
+      ...[...docUnits, ...COMMON_UNITS].filter((u, j, l) => !fits.includes(u) && l.indexOf(u) === j).map(u => `<option value="${esc(u)}">`)].join('');
+    const set = unitsOf()[name] != null;
     return `<tr><td data-latex="${esc(v.latex)}" title="Insert into equation">${convertLatexToMarkup(v.latex)}</td>
-      <td>${convertLatexToMarkup(formatNumber(v.value, dp))} <span class="unit">${esc(formatUnit(v.unit))}</span></td>
+      <td>${convertLatexToMarkup(formatNumber(v.value, dp))}</td>
+      <td><input class="unit-in${set ? ' set' : ''}" data-unit="${esc(name)}" list="ul${i}" value="${esc(formatUnit(v.unit))}" placeholder="${esc(fits[0] ? fits[0] + '?' : 'unit')}" title="${set ? 'Unit you chose. Clear it to go back to the worked-out unit.' : 'Type a unit or pick one; the first suggestions fit your equations'}" spellcheck="false"><datalist id="ul${i}">${list}</datalist></td>
       <td><select data-var="${esc(name)}" title="Decimal places">${opts}</select></td></tr>`;
   }).join('');
   const uni = universalList().map(u => {
@@ -328,11 +338,32 @@ function renderVars() {
       <td><button data-uni="${esc(u.key)}" title="${off ? 'Use again in this project' : 'Stop using in this project'}"><span class="icon">${off ? 'undo' : 'close'}</span></button></td></tr>`;
   }).join('');
   $('#vars').innerHTML = (rows
-    ? `<table><tr><th>Name</th><th>Value</th><th>Decimals</th></tr>${rows}</table>`
+    ? `<table><tr><th>Name</th><th>Value</th><th>Unit</th><th>d.p.</th></tr>${rows}</table>`
     : '<p class="hint">No variables yet. Type something like x=5, or use Paste variables.</p>') +
     `<h4>Universal <button data-act="editUniversals" title="Edit the universal constants (all projects)"><span class="icon">edit</span>Edit</button></h4>
     <p class="hint">Known in every project. ✕ stops using one in this project; writing e.g. g=10 overrides it from that line down.</p>
     <table>${uni}</table>`;
+}
+
+// A unit picked in the Variables pane. Convertible (mm -> m): a "name = number unit" line is rewritten with
+// the converted number; a calculated variable keeps the chosen unit and its value is converted wherever it's used.
+// Not convertible (or no unit before): the unit is just relabelled.
+function changeUnit(name, text) {
+  const v = result.vars.get(name), w = v && doc.querySelector(`.eq[data-id="${v.id}"]`);
+  const from = v?.unit ?? {}, to = parseUnit(text);
+  const converted = text && Object.keys(from).length ? convertValue(v.value, from, to) : null;
+  const line = w && (w.dataset.base ?? w.firstChild.value);
+  const incompatible = text && Object.keys(from).length && converted == null;
+  if (line && plainDefinition(line) === name) {
+    // the variable's own "name = number unit" line: rewrite it so the page always matches the maths
+    w.firstChild.value = `${line.slice(0, line.indexOf('='))}=${formatNumber(converted ?? v.value, null)}${text ? `\\text{ ${text}}` : ''}`;
+    delete w.dataset.base;
+    delete unitsOf()[name];
+  } else if (text) unitsOf()[name] = text;
+  else delete unitsOf()[name];
+  flash(incompatible ? `${formatUnit(from)} and ${text} measure different things, so the unit was relabelled, not converted`
+    : converted != null ? `Converted ${formatUnit(from)} → ${text}` : text ? `Unit set to ${text}` : 'Unit cleared');
+  recompute();
 }
 
 function setDp(name, dp) {
@@ -658,6 +689,8 @@ $('#vars').addEventListener('click', e => {
 });
 
 $('#vars').addEventListener('change', e => {
+  const u = e.target.dataset.unit;
+  if (u != null) return changeUnit(u, e.target.value.trim());
   if (e.target.dataset.var) setDp(e.target.dataset.var, e.target.value === '' ? null : Number(e.target.value));
 });
 
