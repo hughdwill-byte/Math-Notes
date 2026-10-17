@@ -282,7 +282,9 @@ function pasteVars(vars, from) {
   }
   const fresh = [];
   let updated = 0;
+  const lines = new Set([...doc.querySelectorAll('.eq')].map(w => w.firstChild.value));
   for (const v of vars) {
+    if (!v.key) { if (lines.has(v.latex)) continue; lines.add(v.latex); fresh.push(v.latex); continue; } // e.g. Q·S·c_bar = 4.473
     const w = existing.get(v.key);
     if (!w) { fresh.push(v.latex); existing.set(v.key, true); continue; }
     if (w === true) continue; // repeated within the same paste

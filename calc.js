@@ -334,9 +334,16 @@ function looseName(label) {
   return words.every(w => /^[A-Za-z]+$/.test(w)) ? symbolOnly(`\\mathrm{${words.length > 1 ? words.map(w => w[0].toUpperCase() + w.slice(1)).join('') : words[0]}}`) : null;
 }
 
+// A label that is a product of symbols, e.g. "Q·S·c_bar": kept as an equation line (key null)
+function productName(label) {
+  const factors = label.normalize('NFKC').split(/\s*[·⋅*×]\s*/);
+  const names = factors.length > 1 ? factors.map(f => varName(f) ?? looseName(f)) : [];
+  return names.length && names.every(Boolean) ? { nameLatex: names.map(n => n.nameLatex).join('\\cdot '), key: null } : null;
+}
+
 function makeVar(nameCell, valueCell, unitCell = '') {
   let name = varName(nameCell), labelUnit = '';
-  if (!name) { const [label, u] = splitLabel(nameCell); name = varName(label) ?? looseName(label); labelUnit = u; }
+  if (!name) { const [label, u] = splitLabel(nameCell); name = varName(label) ?? looseName(label) ?? productName(label); labelUnit = u; }
   const value = varValue(valueCell);
   if (!name) return null;
   if (!value) return { latex: `${name.nameLatex}=${valueCell.trim()}`, ...name, number: null }; // an expression
@@ -489,7 +496,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
       if (root == null) continue;
       // unit of the unknown: give it a probe unit, see what power p it ends up with on its side,
       // then unit = (other side / rest of its side)^(1/p)
-      const probe = unitOf(a.p, { [u]: { '#': 1 } }), other = unitOf(b.p);
+      const probe = unitOf(a.p, { [u]: { '#': 1 } }), other = typedUnit != null && b === nonEmpty.at(-1) ? parseUnit(typedUnit) : unitOf(b.p);
       const p = probe?.['#'], unit = p && other ? powU(mulU(other, Object.fromEntries(Object.entries(probe).filter(([n]) => n !== '#')), -1), 1 / p) : {};
       set(u, uLatex, root, id, unit);
       ghost = `\\Rightarrow ${uLatex}=${withUnit(formatNumber(vars.get(u).value, dp[u]), unit)}`;

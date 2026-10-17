@@ -73,11 +73,12 @@ assert.equal(r.ghosts[2], '\\frac{0.108}{1+\\frac{0.108}{\\left(\\pi\\cdot 4.544
 r = run(['F=600\\text{ N}', 'm=1200\\text{ kg}', 'F=ma', 'q=5\\text{ mm}', 'w=q']);
 assert.equal(r.ghosts[2], '\\Rightarrow a=0.5\\text{ N/kg}');
 assert.equal(r.ghosts[4], '=5=5\\text{ mm}');
+assert.equal(run(['Q=747.96\\text{ Pa}', 'c=0.1102\\text{ m}', 'Q\\cdot S\\cdot c=4.473\\text{ N·m}']).ghosts[2], '\\Rightarrow S=0.05426738951\\text{ N/Pa}');
 // Excel: name with unit in brackets, value in the next column
 const xl = 'Temp (K)\t290.15\r\nPressure (Pa)\t101690\r\nR (J/kg·K)\t287\r\nρ (kg/m^3)\t1.221\r\nu_0 (m/s)\t35\r\nS wing (m^2)\t0.05425\r\nλ\t0.752\r\nc_bar (m)\t0.1102\r\nQ·S·c_bar (N·m)\t4.473\r\nSting Height h (m)\t0.705\r\nM_S (N·m)\t3.27';
 assert.deepEqual(eqs(xl), ['\\mathrm{Temp}=290.15\\text{ K}', '\\mathrm{Pressure}=101690\\text{ Pa}', 'R=287\\text{ J/kg·K}', '\\rho=1.221\\text{ kg/m³}',
-  'u_{0}=35\\text{ m/s}', 'S_{wing}=0.05425\\text{ m²}', '\\lambda=0.752', 'c_{bar}=0.1102\\text{ m}', 'h=0.705\\text{ m}', 'M_{S}=3.27\\text{ N·m}']);
-assert.deepEqual(parseVariables(xl).skipped, ['Q·S·c_bar (N·m)  4.473']);
+  'u_{0}=35\\text{ m/s}', 'S_{wing}=0.05425\\text{ m²}', '\\lambda=0.752', 'c_{bar}=0.1102\\text{ m}', 'Q\\cdot S\\cdot c_{bar}=4.473\\text{ N·m}', 'h=0.705\\text{ m}', 'M_{S}=3.27\\text{ N·m}']);
+assert.deepEqual(parseVariables(xl).skipped, []);
 r = run(['\\mathrm{Pressure}=101690\\text{ Pa}', 'R=287\\text{ J/kg·K}', '\\mathrm{Temp}=290.15\\text{ K}', '\\rho=\\frac{Pressure}{RTemp}']);
 assert.equal(r.ghosts[3], '=\\frac{101690}{287\\cdot 290.15}=1.22116339\\text{ Pa·kg/J}'); // typed words match; units combine
 assert.deepEqual(parseVariables('Symbol\tValue\nm\t5\nTotal\tTBC').skipped, ['Total  TBC']);
