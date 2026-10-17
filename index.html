@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Math Notes</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive-static.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive-fonts.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,300,0,0&display=block">
+<style>
+  :root {
+    --brand: #185abd; --brand-dark: #124a9c; --canvas: #e9e9e9; --ribbon: #f3f2f1; --line: #d2d0ce;
+    --text: #201f1e; --muted: #605e5c; --hover: #e1dfdd; --pressed: #c8c6c4; --page: #fff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 13px "Segoe UI", system-ui, sans-serif; color: var(--text); background: var(--canvas); display: flex; flex-direction: column; }
+  .icon { font-family: "Material Symbols Outlined"; font-size: 20px; line-height: 1; font-weight: 300; }
+
+  /* title bar */
+  #titlebar { background: var(--brand); color: #fff; display: flex; align-items: center; gap: 4px; padding: 0 8px; height: 40px; flex: none; }
+  #titlebar button { color: #fff; }
+  #titlebar button:hover { background: var(--brand-dark); }
+  #doc-title { flex: 1; text-align: center; font-size: 13px; }
+
+  /* tabs + ribbon */
+  #tabs { background: var(--ribbon); display: flex; padding: 0 8px; flex: none; }
+  #tabs button { padding: 8px 12px 6px; border-bottom: 3px solid transparent; border-radius: 0; }
+  #tabs button.on { border-bottom-color: var(--brand); color: var(--brand); font-weight: 600; }
+  #tabs button.file { color: var(--brand); }
+  #tabs button.contextual { color: var(--brand); }
+  #ribbon { background: var(--ribbon); border-bottom: 1px solid var(--line); flex: none; overflow-x: auto; }
+  .panel { display: none; padding: 4px 8px 0; min-height: 96px; }
+  .panel.on { display: flex; }
+  .group { display: flex; flex-direction: column; padding: 0 8px; border-right: 1px solid var(--line); margin-bottom: 4px; }
+  .group > .body { flex: 1; display: flex; align-items: flex-start; gap: 2px; flex-wrap: wrap; max-width: 520px; }
+  .group > .label { text-align: center; color: var(--muted); font-size: 11px; padding: 2px 0; }
+  .rows { display: flex; flex-direction: column; gap: 2px; }
+  .row { display: flex; gap: 2px; align-items: center; }
+  button { font: inherit; color: inherit; background: none; border: 0; border-radius: 3px; padding: 4px 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+  button:hover { background: var(--hover); }
+  button[aria-pressed="true"] { background: var(--pressed); }
+  button.big { flex-direction: column; min-width: 52px; padding: 4px 6px; font-size: 12px; line-height: 1.2; }
+  button.big .icon { font-size: 32px; }
+  button.big .mi { height: 34px; display: flex; align-items: center; font-size: 17px; }
+  select, input[type=number] { font: inherit; border: 1px solid var(--line); border-radius: 2px; padding: 2px 4px; background: #fff; height: 26px; }
+  .sym { min-width: 26px; justify-content: center; font-size: 15px; }
+  .sym .ML__latex, .mi .ML__latex { pointer-events: none; }
+  .chk { display: flex; align-items: center; gap: 6px; padding: 4px 6px; cursor: pointer; }
+
+  /* dropdown galleries and file menu */
+  .menu { position: fixed; z-index: 10; background: #fff; border: 1px solid var(--line); box-shadow: 0 6px 16px rgba(0,0,0,.18); border-radius: 4px; padding: 6px; display: grid; grid-template-columns: repeat(4, auto); gap: 4px; }
+  .menu.list { grid-template-columns: 1fr; min-width: 180px; }
+  .menu button { justify-content: center; min-width: 56px; min-height: 44px; font-size: 16px; }
+  .menu.list button { justify-content: flex-start; min-height: 32px; font-size: 13px; gap: 10px; }
+
+  /* document area */
+  #main { flex: 1; display: flex; min-height: 0; }
+  #scroller { flex: 1; overflow: auto; padding: 24px 16px 48px; }
+  #page { background: var(--page); width: 816px; max-width: 100%; min-height: 1056px; margin: 0 auto; padding: 96px; box-shadow: 0 1px 3px rgba(0,0,0,.2), 0 0 1px rgba(0,0,0,.1); transform-origin: top center; }
+  #editor { outline: none; min-height: 864px; font: 11pt Calibri, Carlito, "Segoe UI", sans-serif; line-height: 1.15; white-space: pre-wrap; overflow-wrap: break-word; }
+  #editor p { margin: 0 0 8pt; }
+  #editor h1 { font-size: 16pt; color: #0f4761; font-weight: 400; margin: 18pt 0 4pt; }
+  #editor h2 { font-size: 13pt; color: #0f4761; font-weight: 400; margin: 8pt 0 4pt; }
+  #editor h3 { font-size: 12pt; color: #0f4761; font-weight: 400; margin: 8pt 0 4pt; }
+  #editor table { border-collapse: collapse; width: 100%; margin-bottom: 8pt; }
+  #editor td { border: 1px solid #000; padding: 2pt 5pt; vertical-align: top; }
+
+  /* equation box */
+  .eq { display: inline-flex; align-items: baseline; border-radius: 2px; }
+  .eq:focus-within { background: #f0f0f0; outline: 1px solid #c8c6c4; }
+  math-field { display: inline-block; border: 0; background: transparent; font-size: 1.2em; padding: 0 2px; min-width: 1em; --selection-background-color: #c7e0f4; --caret-color: #000; outline: none; }
+  math-field::part(menu-toggle), math-field::part(virtual-keyboard-toggle) { display: none; }
+  @media (pointer: coarse) { math-field::part(virtual-keyboard-toggle) { display: flex; } }
+  .ghost { display: none; color: #8a8886; font-size: 1.2em; white-space: nowrap; }
+  .eq:focus-within .ghost:not(:empty) { display: inline-flex; align-items: baseline; gap: 6px; }
+  .ghost kbd { font: 10px "Segoe UI", sans-serif; border: 1px solid #c8c6c4; border-radius: 3px; padding: 0 4px; color: var(--muted); background: #fff; }
+
+  /* variables pane */
+  #pane { width: 280px; background: #fff; border-left: 1px solid var(--line); display: flex; flex-direction: column; flex: none; }
+  #pane[hidden] { display: none; }
+  #pane header { display: flex; align-items: center; padding: 10px 12px; font-size: 15px; font-weight: 600; }
+  #pane header span { flex: 1; }
+  #pane .hint { color: var(--muted); padding: 0 12px 8px; font-size: 12px; }
+  #vars { overflow: auto; padding: 0 8px; }
+  #vars table { width: 100%; border-collapse: collapse; }
+  #vars th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11px; padding: 4px; }
+  #vars td { padding: 4px; border-top: 1px solid #edebe9; }
+  #vars td:first-child { cursor: pointer; }
+  #vars td:first-child:hover { background: var(--hover); }
+  #vars select { height: 24px; }
+
+  /* status bar */
+  #status { background: var(--ribbon); border-top: 1px solid var(--line); display: flex; align-items: center; gap: 16px; padding: 2px 12px; font-size: 12px; color: var(--muted); flex: none; }
+  #status .spacer { flex: 1; }
+  #status input[type=range] { width: 100px; }
+
+  @media (max-width: 860px) { #page { padding: 32px 20px; min-height: 0; } #editor { min-height: 60vh; } #pane { position: fixed; right: 0; top: 0; bottom: 0; z-index: 5; } }
+  @media print {
+    #titlebar, #tabs, #ribbon, #pane, #status, .ghost { display: none !important; }
+    body, #scroller { background: #fff; overflow: visible; padding: 0; display: block; }
+    #page { box-shadow: none; padding: 0; width: auto; transform: none !important; }
+    .eq:focus-within { background: none; outline: 0; }
+  }
+</style>
+</head>
+<body>
+<div id="titlebar">
+  <button data-act="save" title="Save (Ctrl+S)"><span class="icon">save</span></button>
+  <button data-exec="undo" title="Undo (Ctrl+Z)"><span class="icon">undo</span></button>
+  <button data-exec="redo" title="Redo (Ctrl+Y)"><span class="icon">redo</span></button>
+  <div id="doc-title">Document1 - Math Notes</div>
+</div>
+
+<div id="tabs" role="tablist">
+  <button class="file" data-act="fileMenu">File</button>
+  <button data-tab="home" class="on">Home</button>
+  <button data-tab="insert">Insert</button>
+  <button data-tab="equation" class="contextual">Equation</button>
+  <button data-tab="view">View</button>
+</div>
+
+<div id="ribbon">
+  <div class="panel on" id="tab-home">
+    <div class="group"><div class="body">
+      <button class="big" data-act="paste" title="Paste (Ctrl+V)"><span class="icon">content_paste</span>Paste</button>
+      <div class="rows">
+        <button data-exec="cut" title="Cut (Ctrl+X)"><span class="icon">content_cut</span>Cut</button>
+        <button data-exec="copy" title="Copy (Ctrl+C)"><span class="icon">content_copy</span>Copy</button>
+      </div>
+    </div><div class="label">Clipboard</div></div>
+    <div class="group"><div class="body"><div class="rows">
+      <div class="row">
+        <select id="font" title="Font">
+          <option>Calibri</option><option>Aptos</option><option>Arial</option><option>Cambria</option><option>Times New Roman</option><option>Georgia</option><option>Verdana</option><option>Courier New</option>
+        </select>
+        <select id="size" title="Font Size">
+          <option>8</option><option>9</option><option>10</option><option selected>11</option><option>12</option><option>14</option><option>16</option><option>18</option><option>20</option><option>24</option><option>28</option><option>36</option><option>48</option><option>72</option>
+        </select>
+      </div>
+      <div class="row">
+        <button data-exec="bold" title="Bold (Ctrl+B)"><span class="icon">format_bold</span></button>
+        <button data-exec="italic" title="Italic (Ctrl+I)"><span class="icon">format_italic</span></button>
+        <button data-exec="underline" title="Underline (Ctrl+U)"><span class="icon">format_underlined</span></button>
+        <button data-exec="strikeThrough" title="Strikethrough"><span class="icon">strikethrough_s</span></button>
+        <button data-exec="subscript" title="Subscript"><span class="icon">subscript</span></button>
+        <button data-exec="superscript" title="Superscript"><span class="icon">superscript</span></button>
+        <button data-act="highlight" title="Text Highlight Color"><span class="icon" style="border-bottom:3px solid #ff0">ink_highlighter</span></button>
+        <button data-act="color" title="Font Color"><span class="icon" style="border-bottom:3px solid #c00000" id="color-bar">format_color_text</span></button>
+        <button data-exec="removeFormat" title="Clear All Formatting"><span class="icon">format_clear</span></button>
+      </div>
+    </div></div><div class="label">Font</div></div>
+    <div class="group"><div class="body"><div class="rows">
+      <div class="row">
+        <button data-exec="insertUnorderedList" title="Bullets"><span class="icon">format_list_bulleted</span></button>
+        <button data-exec="insertOrderedList" title="Numbering"><span class="icon">format_list_numbered</span></button>
+        <button data-exec="outdent" title="Decrease Indent"><span class="icon">format_indent_decrease</span></button>
+        <button data-exec="indent" title="Increase Indent"><span class="icon">format_indent_increase</span></button>
+      </div>
+      <div class="row">
+        <button data-exec="justifyLeft" title="Align Left (Ctrl+L)"><span class="icon">format_align_left</span></button>
+        <button data-exec="justifyCenter" title="Center (Ctrl+E)"><span class="icon">format_align_center</span></button>
+        <button data-exec="justifyRight" title="Align Right (Ctrl+R)"><span class="icon">format_align_right</span></button>
+        <button data-exec="justifyFull" title="Justify (Ctrl+J)"><span class="icon">format_align_justify</span></button>
+      </div>
+    </div></div><div class="label">Paragraph</div></div>
+    <div class="group"><div class="body">
+      <button class="big" data-block="p"><span class="mi" style="font-family:Calibri,Carlito,sans-serif">AaBbCc</span>Normal</button>
+      <button class="big" data-block="h1"><span class="mi" style="color:#0f4761;font-size:20px">AaBb</span>Heading 1</button>
+      <button class="big" data-block="h2"><span class="mi" style="color:#0f4761">AaBbC</span>Heading 2</button>
+      <button class="big" data-block="h3"><span class="mi" style="color:#0f4761;font-size:15px">AaBbCc</span>Heading 3</button>
+    </div><div class="label">Styles</div></div>
+    <div class="group"><div class="body">
+      <button class="big" data-act="insertEquation" title="Insert New Equation (Alt+=)"><span class="icon">function</span>Equation</button>
+    </div><div class="label">Maths</div></div>
+  </div>
+
+  <div class="panel" id="tab-insert">
+    <div class="group"><div class="body">
+      <button class="big" data-act="table" title="Insert a 3 × 3 table"><span class="icon">table</span>Table</button>
+      <button class="big" data-exec="insertHorizontalRule" title="Horizontal Line"><span class="icon">horizontal_rule</span>Line</button>
+    </div><div class="label">Tables</div></div>
+    <div class="group"><div class="body">
+      <button class="big" data-act="insertEquation" title="Insert New Equation (Alt+=)"><span class="icon">function</span>Equation</button>
+    </div><div class="label">Symbols</div></div>
+  </div>
+
+  <div class="panel" id="tab-equation">
+    <div class="group"><div class="body">
+      <button class="big" data-act="insertEquation" title="Insert New Equation (Alt+=)"><span class="icon">function</span>Equation</button>
+    </div><div class="label">Tools</div></div>
+    <div class="group"><div class="body"><div class="rows">
+      <label class="chk" title="On: x = y/z → = 10/2 = 5. Off: x = y/z → = 5"><input type="checkbox" id="show-working"> Show working step</label>
+      <div class="row">
+        <button data-act="dpDown" title="Decrease Decimal (variable in this equation)"><span class="icon">decimal_decrease</span></button>
+        <button data-act="dpUp" title="Increase Decimal (variable in this equation)"><span class="icon">decimal_increase</span></button>
+        <span id="dp-label" style="color:var(--muted)">Decimals: Auto</span>
+      </div>
+      <button data-act="accept" title="Fill in the grey suggestion (Tab)"><span class="icon">keyboard_tab</span>Fill in answer</button>
+    </div></div><div class="label">Calculation</div></div>
+    <div class="group"><div class="body" id="symbols"></div><div class="label">Symbols</div></div>
+    <div class="group"><div class="body" id="structures" style="max-width:none;flex-wrap:nowrap"></div><div class="label">Structures</div></div>
+  </div>
+
+  <div class="panel" id="tab-view">
+    <div class="group"><div class="body">
+      <button class="big" data-act="togglePane" title="Show or hide the Variables pane"><span class="icon">view_sidebar</span>Variables</button>
+      <button class="big" data-act="print" title="Print (Ctrl+P)"><span class="icon">print</span>Print</button>
+    </div><div class="label">Show</div></div>
+  </div>
+</div>
+
+<div id="main">
+  <div id="scroller"><div id="page"><div id="editor" contenteditable="true" spellcheck="true"></div></div></div>
+  <aside id="pane">
+    <header><span>Variables</span><button data-act="togglePane" title="Close"><span class="icon">close</span></button></header>
+    <div class="hint">Defined by equations top to bottom. Click a name to insert it. Decimals are used whenever the variable is put into another equation.</div>
+    <div id="vars"></div>
+  </aside>
+</div>
+
+<div id="status">
+  <span id="words">0 words</span>
+  <span id="var-count">0 variables</span>
+  <span class="spacer"></span>
+  <span>Alt+= new equation · Tab fills suggestion</span>
+  <input type="range" id="zoom" min="50" max="200" step="10" value="100" title="Zoom">
+  <span id="zoom-label">100%</span>
+</div>
+
+<input type="file" id="open-file" accept=".mathnotes,.html,.htm" hidden>
+<input type="color" id="color-pick" value="#c00000" hidden>
+<script type="module" src="app.js"></script>
+</body>
+</html>
