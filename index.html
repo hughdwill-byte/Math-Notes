@@ -82,6 +82,9 @@
   .label { margin: 12px 0 0; }
   .label h3 { font: 600 11.5pt Calibri, Carlito, "Segoe UI", sans-serif; color: #404040; margin: 0; outline: none; padding: 2px 0; }
   .label h3:empty::before { content: "Label"; color: #a19f9d; font-weight: 400; }
+  .sublabel { margin: 8px 0 0 14px; }
+  .sublabel h4 { font: italic 600 10.5pt Calibri, Carlito, "Segoe UI", sans-serif; color: #605e5c; margin: 0; outline: none; padding: 2px 0; }
+  .sublabel h4:empty::before { content: "Sub-label"; color: #a19f9d; font-weight: 400; }
 
   /* variables pane */
   #pane { width: 340px; background: #fff; border-left: 1px solid var(--line); display: flex; flex-direction: column; flex: none; }
@@ -132,7 +135,7 @@
     #titlebar, #tabs, #ribbon, #pane, #sympane, #status, .ghost { display: none !important; }
     html, body, #scroller { background: #fff; overflow: visible; height: auto; padding: 0; display: block; }
     #page { box-shadow: none; padding: 0; width: auto; min-height: 0; }
-    .section h2:empty, .label h3:empty { display: none; }
+    .section h2:empty, .label h3:empty, .sublabel h4:empty { display: none; }
   }
 </style>
 </head>
@@ -160,6 +163,7 @@
       <button class="big" data-act="newEq" title="New equation below (Enter)"><span class="icon">add</span>New<br>equation</button>
       <button class="big" data-act="newSection" title="New section: a line with a heading (Ctrl+Enter)"><span class="icon">horizontal_rule</span>New<br>section</button>
 <button class="big" data-act="newLabel" title="New label: a subheading for an equation or group of equations (Ctrl+Shift+Enter)"><span class="icon">label</span>New<br>label</button>
+      <button class="big" data-act="newSublabel" title="New sub-label: one level under a label (Alt+Enter)"><span class="icon">subdirectory_arrow_right</span>New<br>sub-label</button>
       <button class="big" data-act="pasteVariables" title="Paste a list of variables (e.g. m = 5 kg, one per line)"><span class="icon">playlist_add</span>Paste<br>variables</button>
       <button class="big" data-act="deleteLine" title="Delete this equation or section"><span class="icon">delete</span>Delete<br>line</button>
     </div><div class="label">Insert</div></div>
@@ -214,7 +218,7 @@
   <span id="var-count">0 variables</span>
   <span id="save-status"></span>
   <span class="spacer"></span>
-  <span>Enter: next equation · Ctrl+Enter: new section · Ctrl+Shift+Enter: label · Tab: fill suggestion · Right-click: copy section</span>
+  <span>Enter: next equation · Ctrl+Enter: new section · Ctrl+Shift+Enter: label · Alt+Enter: sub-label · Tab: fill suggestion · Right-click: copy section</span>
 </div>
 
  <dialog id="dlg"><form method="dialog">

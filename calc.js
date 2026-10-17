@@ -209,6 +209,11 @@ export function convertValue(v, from, to) {
   return sameUnit(da, db) ? v * a / b : null;
 }
 
+// a unit as typed, tidied for display: "s^-1" -> "s⁻¹", "kg*m^2" -> "kg·m²"
+export const prettyUnit = text => text.trim()
+  .replace(/\^\(?(-?\d+)\)?/g, (_, n) => [...n].map(c => (c === '-' ? '⁻' : SUPS[c])).join(''))
+  .replace(/[*⋅]/g, '·');
+
 export function formatUnit(u) {
   if (!u) return '';
   const pow = e => (e === 1 ? '' : Number.isInteger(e) ? String(e).replace(/-/, '⁻').replace(/\d/g, d => SUPS[d]) : '^' + e);
@@ -511,10 +516,10 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
   const all = [...eqs, ...initial].map(e => e.latex).join(' ');
   MULTI = [...new Set([...all.matchAll(/\\(?:mathrm|operatorname)\{([A-Za-z]{2,})\}/g)].map(m => m[1]))].sort((a, b) => b.length - a.length);
   // a unit chosen in the Variables pane: converts the value when it can, otherwise just relabels
-  const chosen = (name, value, unit) => {
-    if (unitOverrides[name] == null) return { value, unit };
+  const chosen = (name, value, unit, unitText) => {
+    if (unitOverrides[name] == null) return { value, unit, unitText };
     const to = parseUnit(unitOverrides[name]), v = Object.keys(unit).length ? convertValue(value, unit, to) : null;
-    return { value: v ?? value, unit: to };
+    return { value: v ?? value, unit: to, unitText: prettyUnit(unitOverrides[name]) };
   };
   const hints = {}; // id -> Map(unknown latex -> similar known latex)
   const typedDp = {}; // name -> decimal places of a typed answer (the app keeps them as that variable's setting)
@@ -536,10 +541,11 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
       return [k, formatNumber(round10(v.value * f), null)];
     }));
   };
-  const set = (name, latex, value, id, unit = {}) => {
-    ({ value, unit } = chosen(name, value, unit));
+  // unitText: the unit as written (s⁻¹), shown instead of the worked-out form (1/s) when there is one
+  const set = (name, latex, value, id, unit = {}, unitText) => {
+    ({ value, unit, unitText } = chosen(name, value, unit, unitText));
     if (dp[name] != null) value = Number(value.toFixed(dp[name]));
-    vars.set(name, { value, latex, id, unit });
+    vars.set(name, { value, latex, id, unit, unitText });
   };
   // unit of a fully known part, from its variables' units; extra: { name: unit } for a probe unknown
   const unitOf = (t, extra = {}) => {
@@ -566,7 +572,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
       }
     });
   };
-  const withUnit = (num, u) => (u && Object.keys(u).length ? `${num}\\text{ ${formatUnit(u)}}` : num);
+  const withUnit = (num, u, text) => (text ? `${num}\\text{ ${text}}` : u && Object.keys(u).length ? `${num}\\text{ ${formatUnit(u)}}` : num);
   const evalTokens = (t, extra = {}) => {
     const { occ } = scan(t);
     if (occ.some(o => !(o.name in extra) && !vars.has(o.name))) return null;
@@ -594,7 +600,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
       const last = rest[rest.length - 1];
       if (target && trailingEmpty && !rest.length) {
         const v = vars.get(target.name);
-        if (v) ghost = withUnit(formatNumber(v.value, dp[target.name]), v.unit);
+        if (v) ghost = withUnit(formatNumber(v.value, dp[target.name]), v.unit, v.unitText);
         continue;
       }
       // the line ends in a number you typed (x = ... = 0.1102): take the value and unit from the working, then
@@ -609,8 +615,8 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
           const V = vars.get(target.name);
           const places = join(last.p).match(/^-?\d*\.(\d+)$/)?.[1].length;
           if (matches && dp[target.name] == null && places != null) typedDp[target.name] = places; // keep the decimals you typed
-          if (matches) { refill[id] = latex.slice(0, latex.lastIndexOf('=')); ghost = '=' + withUnit(formatNumber(V.value, dp[target.name]), V.unit); }
-          else if (Object.keys(V.unit).length) { refill[id] = latex; ghost = `\\text{ ${formatUnit(V.unit)}}`; }
+          if (matches) { refill[id] = latex.slice(0, latex.lastIndexOf('=')); ghost = '=' + withUnit(formatNumber(V.value, dp[target.name]), V.unit, V.unitText); }
+          else if (Object.keys(V.unit).length) { refill[id] = latex; ghost = `\\text{ ${V.unitText ?? formatUnit(V.unit)}}`; }
           continue;
         }
       }
@@ -620,10 +626,10 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
           // the unit comes from a known step that still has variables in it (a pure-number step has no units)
           const unitPart = [...rest].reverse().find(x => !unknownsIn(x.s).length && x.s.occ.length) ?? known;
           const unit = typedUnit != null && known === last && si === statements.length - 1 ? parseUnit(typedUnit) : unitOf(unitPart.p);
-          set(target.name, target.latex, value, id, unit ?? {});
+          set(target.name, target.latex, value, id, unit ?? {}, typedUnit != null && known === last && si === statements.length - 1 ? prettyUnit(typedUnit) : undefined);
           if (last && !unknownsIn(last.s).length && !PLAIN_NUMBER.test(join(last.p))) {
             const pre = trailingEmpty ? '' : '=';
-            const num = withUnit(formatNumber(vars.get(target.name).value, dp[target.name]), vars.get(target.name).unit);
+            const V = vars.get(target.name), num = withUnit(formatNumber(V.value, dp[target.name]), V.unit, V.unitText);
             ghost = showWorking && last.s.occ.length ? `${pre}${join(substitute(last.p, last.s.occ, vals(last.p)))}=${num}` : pre + num;
           }
           continue;
@@ -691,7 +697,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
       const probe = unitOf(a.p, { [u]: { '#': 1 } }), other = typedUnit != null && b === nonEmpty.at(-1) ? parseUnit(typedUnit) : unitOf(b.p);
       const p = probe?.['#'], unit = p && other ? powU(mulU(other, Object.fromEntries(Object.entries(probe).filter(([n]) => n !== '#')), -1), 1 / p) : {};
       set(u, uLatex, root, id, unit);
-      ghost = `\\Rightarrow ${uLatex}=${withUnit(formatNumber(vars.get(u).value, dp[u]), vars.get(u).unit)}`;
+      ghost = `\\Rightarrow ${uLatex}=${withUnit(formatNumber(vars.get(u).value, dp[u]), vars.get(u).unit, vars.get(u).unitText)}`;
     }
     if (ghost) ghosts[id] = ghost;
   }

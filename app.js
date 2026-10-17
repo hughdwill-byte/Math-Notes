@@ -1,6 +1,6 @@
 import { MathfieldElement, convertLatexToMarkup, convertLatexToMathMl } from 'https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.mjs';
 import { ComputeEngine } from 'https://cdn.jsdelivr.net/npm/@cortex-js/compute-engine@0.58.0/dist/compute-engine.min.esm.js';
-import { evaluateDocument, formatNumber, formatUnit, parseUnit, convertValue, parseVarLine, parseVariables, plainDefinition } from './calc.js';
+import { evaluateDocument, formatNumber, formatUnit, prettyUnit, parseUnit, convertValue, parseVarLine, parseVariables, plainDefinition } from './calc.js';
 
 const ce = new ComputeEngine();
 const $ = s => document.querySelector(s);
@@ -84,6 +84,7 @@ function makeEq(latex = '', base) {
     const stop = () => { e.preventDefault(); e.stopPropagation(); };
     if (e.key === 'Tab' && !e.shiftKey && w.dataset.ghost) { stop(); accept(w); }
     else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.shiftKey) { stop(); addLabel(w); }
+    else if (e.key === 'Enter' && e.altKey) { stop(); addSublabel(w); }
     else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { stop(); addSection(w); }
     else if (e.key === 'Enter' && inMatrix(mf)) { stop(); mf.executeCommand('addRowAfter'); schedule(); }
     else if (e.key === 'Enter') { stop(); addEq(w); }
@@ -123,7 +124,6 @@ function leaveScripts(mf, relation = false) {
   }
 }
 
-// A section is a line with a heading; a label is a smaller subheading (no line) for an equation or group.
 function inMatrix(mf) {
   const model = mf._mathfield?.model;
   for (let a = model?.at(model.position); a; a = a.parent) if (a.type === 'array') return true;
@@ -151,10 +151,13 @@ function matrixCmd(cmd, mf = lastEq()?.firstChild) {
   schedule();
 }
 
-function makeSection(title = '', label = false) {
+// A section is a line with a heading; a label is a smaller subheading (no line) for an equation or group;
+// a sublabel is one level smaller again, under a label.
+function makeSection(title = '', kind = 'section') {
+  const label = kind !== 'section';
   const s = document.createElement('div');
-  s.className = label ? 'label' : 'section';
-  const h = document.createElement(label ? 'h3' : 'h2');
+  s.className = kind;
+  const h = document.createElement({ section: 'h2', label: 'h3', sublabel: 'h4' }[kind]);
   h.contentEditable = 'plaintext-only';
   h.textContent = title;
   if (label) s.append(h); else s.append(document.createElement('hr'), h);
@@ -178,7 +181,7 @@ function focusBlock(b, atEnd = false) {
     mf.focus();
     mf.position = atEnd ? mf.lastOffset : 0;
   } else {
-    const h = b.querySelector('h2, h3');
+    const h = b.querySelector('h2, h3, h4');
     h.focus();
     getSelection().selectAllChildren(h);
     getSelection().collapseToEnd();
@@ -187,9 +190,15 @@ function focusBlock(b, atEnd = false) {
 
 const after = (ref, node) => (ref?.isConnected ? ref.after(node) : doc.append(node), node);
 function addEq(ref = current, latex = '') { const w = after(ref, makeEq(latex)); focusBlock(w); schedule(); return w; }
-function addSection(ref = current, label = false) { const s = after(ref, makeSection('', label)); focusBlock(s); schedule(); return s; }
-const addLabel = (ref = current) => addSection(ref, true);
-const makeBlock = b => b.section != null ? makeSection(b.section) : b.label != null ? makeSection(b.label, true) : makeEq(b.eq, b.base);
+function addSection(ref = current, kind = 'section') {
+  const s = after(ref, makeSection('', kind));
+  if (ref?.classList?.contains('eq') && !ref.firstChild.value) ref.remove(); // a heading started on an empty line replaces it
+  focusBlock(s); schedule(); return s;
+}
+const addLabel = (ref = current) => addSection(ref, 'label');
+const addSublabel = (ref = current) => addSection(ref, 'sublabel');
+const makeBlock = b => b.section != null ? makeSection(b.section) : b.label != null ? makeSection(b.label, 'label')
+  : b.sublabel != null ? makeSection(b.sublabel, 'sublabel') : makeEq(b.eq, b.base);
 
 function removeBlock(b) {
   if (!b?.isConnected) return;
@@ -335,7 +344,7 @@ function renderVars() {
     const set = unitsOf()[name] != null;
     return `<tr><td data-latex="${esc(v.latex)}" title="Insert into equation">${convertLatexToMarkup(v.latex)}</td>
       <td>${convertLatexToMarkup(formatNumber(v.value, dp))}</td>
-      <td><input class="unit-in${set ? ' set' : ''}" data-unit="${esc(name)}" list="ul${i}" value="${esc(formatUnit(v.unit))}" placeholder="${esc(fits[0] ? fits[0] + '?' : 'unit')}" title="${set ? 'Unit you chose. Clear it to go back to the worked-out unit.' : 'Type a unit or pick one; the first suggestions fit your equations'}" spellcheck="false"><datalist id="ul${i}">${list}</datalist></td>
+      <td><input class="unit-in${set ? ' set' : ''}" data-unit="${esc(name)}" list="ul${i}" value="${esc(v.unitText ?? formatUnit(v.unit))}" placeholder="${esc(fits[0] ? fits[0] + '?' : 'unit')}" title="${set ? 'Unit you chose. Clear it to go back to the worked-out unit.' : 'Type a unit or pick one; the first suggestions fit your equations'}" spellcheck="false"><datalist id="ul${i}">${list}</datalist></td>
       <td><select data-var="${esc(name)}" title="Decimal places">${opts}</select></td></tr>`;
   }).join('');
   const uni = universalList().map(u => {
@@ -356,6 +365,7 @@ function renderVars() {
 // the converted number; a calculated variable keeps the chosen unit and its value is converted wherever it's used.
 // Not convertible (or no unit before): the unit is just relabelled.
 function changeUnit(name, text) {
+  text = prettyUnit(text); // s^-1 -> s⁻¹
   const v = result.vars.get(name), w = v && doc.querySelector(`.eq[data-id="${v.id}"]`);
   const from = v?.unit ?? {}, to = parseUnit(text);
   const converted = text && Object.keys(from).length ? convertValue(v.value, from, to) : null;
@@ -395,14 +405,16 @@ function bumpDp(delta) {
 const serialize = () => blocks().map(b => b.classList.contains('eq')
   ? { eq: b.firstChild.value, base: b.dataset.base }
   : b.classList.contains('label') ? { label: b.querySelector('h3').textContent }
+  : b.classList.contains('sublabel') ? { sublabel: b.querySelector('h4').textContent }
   : { section: b.querySelector('h2').textContent });
 
 // also reads the older HTML format (equations and headings kept, other text dropped)
 function fromHtml(html) {
   const t = document.createElement('template');
   t.innerHTML = html;
-  return [...t.content.querySelectorAll('[data-latex], h1, h2, h3')].map(el =>
-    el.dataset.latex != null ? { eq: el.dataset.latex } : el.tagName === 'H3' ? { label: el.textContent.trim() } : { section: el.textContent.trim() });
+  return [...t.content.querySelectorAll('[data-latex], h1, h2, h3, h4')].map(el =>
+    el.dataset.latex != null ? { eq: el.dataset.latex } : el.tagName === 'H3' ? { label: el.textContent.trim() }
+      : el.tagName === 'H4' ? { sublabel: el.textContent.trim() } : { section: el.textContent.trim() });
 }
 
 function setDocument(list) {
@@ -549,20 +561,23 @@ function sectionOf(b) {
 const copyAll = () => copyBlocks(blocks());
 const copySection = (b = current) => b?.isConnected && copyBlocks(sectionOf(b));
 
-// a label and the equations under it, down to the next label or section (null if not under a label)
+// the nearest label or sublabel above b and everything under it, down to the next heading of the same
+// or a higher level (null if not under a label)
 function groupOf(b) {
-  while (b.previousElementSibling && !b.matches('.label, .section')) b = b.previousElementSibling;
-  if (!b.matches('.label')) return null;
+  while (b.previousElementSibling && !b.matches('.label, .sublabel, .section')) b = b.previousElementSibling;
+  if (!b.matches('.label, .sublabel')) return null;
+  const stop = b.matches('.label') ? '.label, .section' : '.sublabel, .label, .section';
   const out = [b];
-  for (let n = b.nextElementSibling; n && !n.matches('.label, .section'); n = n.nextElementSibling) out.push(n);
+  for (let n = b.nextElementSibling; n && !n.matches(stop); n = n.nextElementSibling) out.push(n);
   return out;
 }
 
 function copyBlocks(els) {
-  const all = serialize(), list = els.map(b => all[blocks().indexOf(b)]).filter(b => b.section != null || b.label != null || b.eq);
+  const all = serialize(), list = els.map(b => all[blocks().indexOf(b)]).filter(b => b.section != null || b.label != null || b.sublabel != null || b.eq);
   copyHtml(
-    list.map(b => b.section != null ? `<hr><h2>${esc(b.section)}</h2>` : b.label != null ? `<h3>${esc(b.label)}</h3>` : `<p>${eqHtml(b.eq)}</p>`).join(''),
-    list.map(b => b.section != null ? `\n${b.section}\n` : b.label ?? b.eq).join('\n'));
+    list.map(b => b.section != null ? `<hr><h2>${esc(b.section)}</h2>` : b.label != null ? `<h3>${esc(b.label)}</h3>`
+      : b.sublabel != null ? `<h4>${esc(b.sublabel)}</h4>` : `<p>${eqHtml(b.eq)}</p>`).join(''),
+    list.map(b => b.section != null ? `\n${b.section}\n` : b.label ?? b.sublabel ?? b.eq).join('\n'));
 }
 
 function pasteBlocks(list, ref) {
@@ -606,6 +621,7 @@ const actions = {
   newEq: () => addEq(),
   newSection: () => addSection(),
   newLabel: () => addLabel(),
+  newSublabel: () => addSublabel(),
   addRow: () => matrixCmd('addRowAfter'),
   addCol: () => matrixCmd('addColumnAfter'),
   delRow: () => matrixCmd('removeRow'),
@@ -663,7 +679,7 @@ $('#page').addEventListener('click', e => {
 
 // right-click menu on any line (replaces MathLive's own menu)
 doc.addEventListener('contextmenu', e => {
-  const b = e.target.closest?.('.eq, .section, .label');
+  const b = e.target.closest?.('.eq, .section, .label, .sublabel');
   if (!b) return;
   e.preventDefault(); e.stopPropagation();
   current = b;
@@ -676,6 +692,7 @@ doc.addEventListener('contextmenu', e => {
     ['add', 'New equation below', () => addEq(b)],
     ['horizontal_rule', 'New section below', () => addSection(b)],
     ['label', 'New label below', () => addLabel(b)],
+    ['subdirectory_arrow_right', 'New sub-label below', () => addSublabel(b)],
     ...(eq && eq.includes('\\begin{') ? [
       ['table_rows', 'Matrix: add row', () => matrixCmd('addRowAfter', b.firstChild)],
       ['view_column', 'Matrix: add column', () => matrixCmd('addColumnAfter', b.firstChild)],
