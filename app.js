@@ -1,6 +1,6 @@
 import { MathfieldElement, convertLatexToMarkup, convertLatexToMathMl } from 'https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.mjs';
 import { ComputeEngine } from 'https://cdn.jsdelivr.net/npm/@cortex-js/compute-engine@0.58.0/dist/compute-engine.min.esm.js';
-import { evaluateDocument, formatNumber, parseVarLine, parseVariables, plainDefinition } from './calc.js';
+import { evaluateDocument, formatNumber, formatUnit, parseVarLine, parseVariables, plainDefinition } from './calc.js';
 
 const ce = new ComputeEngine();
 const $ = s => document.querySelector(s);
@@ -87,7 +87,7 @@ function makeEq(latex = '', base) {
     else if (e.key === 'Enter' && inMatrix(mf)) { stop(); mf.executeCommand('addRowAfter'); schedule(); }
     else if (e.key === 'Enter') { stop(); addEq(w); }
     else if (e.key === 'Backspace' && !mf.value) { stop(); removeBlock(w); }
-    else if (/^[=+\-*<>,;]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) leaveScripts(mf);
+    else if (/^[=+\-*<>,;]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) leaveScripts(mf, /[=<>]/.test(e.key));
   }, { capture: true });
   for (const type of ['copy', 'cut']) mf.addEventListener(type, e => {
     const sel = mf.selection.ranges[0], collapsed = sel[0] === sel[1];
@@ -109,13 +109,15 @@ function makeEq(latex = '', base) {
 }
 
 // Like Word: an operator typed in a subscript/superscript goes back to the main line first
-// (C_M= gives C_M =, not C_{M=}). An empty script keeps it, so x^-1 still works.
+// (C_M= gives C_M =, not C_{M=}); =, < and > also leave fractions (a/b= gives a/b =).
+// An empty box keeps it, so x^-1 still works.
 // ponytail: uses MathLive's internal model (pinned 0.110.0); recheck if MathLive is upgraded
-function leaveScripts(mf) {
+function leaveScripts(mf, relation = false) {
   const model = mf._mathfield?.model;
-  for (let i = 0; i < 5; i++) {
+  const branches = relation ? /^(subscript|superscript|above|below)$/ : /^(subscript|superscript)$/;
+  for (let i = 0; i < 8; i++) {
     const atom = model?.at(model.position);
-    if (!/^(subscript|superscript)$/.test(atom?.parentBranch) || atom.type === 'first') return;
+    if (!branches.test(atom?.parentBranch) || atom.type === 'first') return;
     mf.executeCommand('moveAfterParent');
   }
 }
@@ -307,20 +309,20 @@ function pasteVars(vars, from) {
 
 const universalList = () => settings.universals.split('\n').map(parseVarLine).filter(u => u?.key && u.number != null);
 const offList = () => (projects[project].off ??= []);
-const universals = () => universalList().filter(u => !offList().includes(u.key)).map(u => ({ key: u.key, latex: u.nameLatex, value: u.number }));
+const universals = () => universalList().filter(u => !offList().includes(u.key)).map(u => ({ key: u.key, latex: u.nameLatex, value: u.number, unit: u.unit }));
 
 function renderVars() {
   const rows = [...result.vars].filter(([, v]) => v.id !== 'universal').map(([name, v]) => {
     const dp = dpOf()[name];
     const opts = ['<option value="">Auto</option>', ...Array.from({ length: 11 }, (_, i) => `<option${dp === i ? ' selected' : ''}>${i}</option>`)].join('');
     return `<tr><td data-latex="${esc(v.latex)}" title="Insert into equation">${convertLatexToMarkup(v.latex)}</td>
-      <td>${convertLatexToMarkup(formatNumber(v.value, dp))}</td>
+      <td>${convertLatexToMarkup(formatNumber(v.value, dp))} <span class="unit">${esc(formatUnit(v.unit))}</span></td>
       <td><select data-var="${esc(name)}" title="Decimal places">${opts}</select></td></tr>`;
   }).join('');
   const uni = universalList().map(u => {
     const off = offList().includes(u.key);
     return `<tr class="${off ? 'off' : ''}"><td data-latex="${esc(u.nameLatex)}" title="Insert into equation">${convertLatexToMarkup(u.nameLatex)}</td>
-      <td>${convertLatexToMarkup(formatNumber(u.number, null))}</td>
+      <td>${convertLatexToMarkup(formatNumber(u.number, null))} <span class="unit">${esc(u.unit)}</span></td>
       <td><button data-uni="${esc(u.key)}" title="${off ? 'Use again in this project' : 'Stop using in this project'}"><span class="icon">${off ? 'undo' : 'close'}</span></button></td></tr>`;
   }).join('');
   $('#vars').innerHTML = (rows

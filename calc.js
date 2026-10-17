@@ -144,6 +144,67 @@ function toNumber(boxed) {
   return Number.isFinite(n) ? n : null;
 }
 
+// ---------- units ----------
+// A unit is a map of unit names to powers: "kg·m/s²" -> { kg: 1, m: 1, s: -2 }. No conversions (mm stays mm).
+const SUPS = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+export function parseUnit(text = '') {
+  const s = text.trim().replace(/[⁰-⁹¹²³⁻]+/g, d => '^' + [...d].map(c => c === '⁻' ? '-' : SUPS.indexOf(c)).join(''));
+  const slash = s.indexOf('/');
+  const u = {};
+  const add = (part, sign) => {
+    for (const f of part.replace(/^\(|\)$/g, '').split(/[·*⋅\s]+/)) {
+      const m = f.match(/^([A-Za-zµμΩ°%Å]+)(?:\^\(?(-?[\d.]+)\)?)?$/);
+      if (m) u[m[1]] = (u[m[1]] || 0) + sign * (m[2] ? +m[2] : 1);
+    }
+  };
+  add(slash < 0 ? s : s.slice(0, slash), 1);
+  if (slash >= 0) add(s.slice(slash + 1), -1);
+  return clean(u);
+}
+const clean = u => Object.fromEntries(Object.entries(u).filter(([, e]) => Math.abs(e) > 1e-12));
+const sameUnit = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
+const mulU = (a, b, k = 1) => { const u = { ...a }; for (const [n, e] of Object.entries(b)) u[n] = (u[n] || 0) + k * e; return clean(u); };
+const powU = (a, p) => clean(Object.fromEntries(Object.entries(a).map(([n, e]) => [n, e * p])));
+const ANGLE = /^(deg|rad|°)$/;
+const noAngles = u => Object.fromEntries(Object.entries(u).filter(([n]) => !ANGLE.test(n)));
+
+export function formatUnit(u) {
+  if (!u) return '';
+  const pow = e => (e === 1 ? '' : Number.isInteger(e) ? String(e).replace(/-/, '⁻').replace(/\d/g, d => SUPS[d]) : '^' + e);
+  const pos = Object.entries(u).filter(([, e]) => e > 0), neg = Object.entries(u).filter(([, e]) => e < 0);
+  const num = pos.map(([n, e]) => n + pow(e)).join('·') || (neg.length ? '1' : '');
+  const den = neg.map(([n, e]) => n + pow(-e)).join('·');
+  return den ? `${num}/${neg.length > 1 ? `(${den})` : den}` : num;
+}
+
+// Unit of a MathJSON expression; sym(name) gives a symbol's unit. null = can't tell (e.g. adding kg to m).
+// Angles count as dimensionless when adding, so 1 + Cl/(πAR) with Cl in 1/deg is fine.
+function unitOfJson(x, sym) {
+  if (typeof x === 'number' || x == null) return {};
+  if (typeof x === 'string') return sym(x) ?? {};
+  if (!Array.isArray(x)) return {};
+  const [head, ...args] = x, us = () => args.map(a => unitOfJson(a, sym));
+  const num = a => { if (typeof a === 'number') return a; if (Array.isArray(a) && a[0] === 'Rational') return a[1] / a[2]; if (Array.isArray(a) && a[0] === 'Negate') return -num(a[1]); return null; };
+  switch (head) {
+    case 'Multiply': return us().reduce((a, b) => (a && b ? mulU(a, b) : null), {});
+    case 'Divide': { const [a, b] = us(); return a && b ? mulU(a, b, -1) : null; }
+    case 'Power': { const a = unitOfJson(args[0], sym), p = num(args[1]); return !a ? null : !Object.keys(a).length ? {} : p == null ? null : powU(a, p); }
+    case 'Square': { const a = unitOfJson(args[0], sym); return a && powU(a, 2); }
+    case 'Sqrt': { const a = unitOfJson(args[0], sym); return a && powU(a, 0.5); }
+    case 'Root': { const a = unitOfJson(args[0], sym), n = num(args[1]); return a && n ? powU(a, 1 / n) : null; }
+    case 'Add': case 'Subtract': {
+      const all = us();
+      if (all.some(u => !u)) return null;
+      if (all.every(u => sameUnit(u, all[0]))) return all[0];
+      const bare = all.map(noAngles);
+      return bare.every(u => sameUnit(u, bare[0])) ? bare[0] : null;
+    }
+    case 'Negate': case 'Abs': case 'Delimiter': case 'Parentheses': case 'Plus': return unitOfJson(args[0], sym);
+    case 'Rational': return {};
+    default: return {}; // sin, ln, exp, constants...: no unit
+  }
+}
+
 // Root finder for f(x) = 0: scan for sign changes then bisect; secant fallback. Prefers positive, then smallest roots.
 export function findRoot(f) {
   const g = x => { const y = f(x); return Number.isFinite(y) ? y : NaN; };
@@ -255,15 +316,35 @@ export function varValue(cell) {
   return { number: Number(m[1] + (m[2] ? 'e' + m[2] : '')), latex: m[2] ? `${m[1]}\\times10^{${parseInt(m[2])}}` : m[1], rest: m[3] };
 }
 
+// Excel-style labels: "Temp (K)", "S wing (m^2)", "Sting Height h (m)" -> [label, unit in brackets]
+function splitLabel(cell) {
+  const m = cell.match(/^(.*?)\s*[([]([^()[\]]*)[)\]]\s*$/);
+  return m ? [m[1], m[2]] : [cell, ''];
+}
+
+// A looser reading of a label that isn't a plain symbol: "Sting Height h" -> h, "S wing" -> S_{wing},
+// "Temp" / "Pressure" -> \mathrm{Temp} (a multi-letter variable, typed as Temp in equations)
+function looseName(label) {
+  const words = label.normalize('NFKC').trim().split(/\s+/).filter(Boolean);
+  if (!words.length || words.some(w => !/^[A-Za-z0-9_α-ωΓ-Ω]+$/.test(w))) return null;
+  const last = words.at(-1), first = varName(words[0]);
+  if (words.length > 1 && !/^[A-Za-z]{2,}$/.test(last) && varName(last)) return varName(last);
+  if (words.length > 1 && first && /^\\?[A-Za-z]+$/.test(first.nameLatex) && words.slice(1).every(w => /^[A-Za-z0-9]+$/.test(w)))
+    return symbolOnly(`${first.nameLatex}_{${words.slice(1).join('')}}`);
+  return words.every(w => /^[A-Za-z]+$/.test(w)) ? symbolOnly(`\\mathrm{${words.length > 1 ? words.map(w => w[0].toUpperCase() + w.slice(1)).join('') : words[0]}}`) : null;
+}
+
 function makeVar(nameCell, valueCell, unitCell = '') {
-  const name = varName(nameCell), value = varValue(valueCell);
+  let name = varName(nameCell), labelUnit = '';
+  if (!name) { const [label, u] = splitLabel(nameCell); name = varName(label) ?? looseName(label); labelUnit = u; }
+  const value = varValue(valueCell);
   if (!name) return null;
   if (!value) return { latex: `${name.nameLatex}=${valueCell.trim()}`, ...name, number: null }; // an expression
-  const unit = (unitCell.trim() || value.rest).replace(/^[([]\s*|\s*[)\]]$/g, '').replace(/[{}\\]/g, '').trim();
+  const unit = (unitCell.trim() || value.rest || labelUnit).replace(/^[([]\s*|\s*[)\]]$/g, '').replace(/[{}\\]/g, '').trim();
   const sup = n => [...n].map(c => '⁰¹²³⁴⁵⁶⁷⁸⁹'[c] ?? (c === '-' ? '⁻' : '')).join('');
   const unitText = unit.replace(/\^\(?(-?\d+)\)?/g, (_, n) => sup(n)).replace(/[⋅*]/g, '·');
   const unitLatex = unit && unit !== '-' && unit !== '–' ? `\\text{ ${unitText}}` : '';
-  return { latex: `${name.nameLatex}=${value.latex}${unitLatex}`, ...name, number: value.number };
+  return { latex: `${name.nameLatex}=${value.latex}${unitLatex}`, ...name, number: value.number, unit: unitLatex ? unitText : '' };
 }
 
 // "m = 5 kg", "v0: 3.2" -> { latex, nameLatex, key, number }
@@ -321,12 +402,20 @@ export function parseVariables(text) {
 export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
   const all = [...eqs, ...initial].map(e => e.latex).join(' ');
   MULTI = [...new Set([...all.matchAll(/\\(?:mathrm|operatorname)\{([A-Za-z]{2,})\}/g)].map(m => m[1]))].sort((a, b) => b.length - a.length);
-  const vars = new Map(initial.map(u => [u.key, { value: u.value, latex: u.latex, id: 'universal' }])), ghosts = {};
+  const vars = new Map(initial.map(u => [u.key, { value: u.value, latex: u.latex, id: 'universal', unit: parseUnit(u.unit) }])), ghosts = {};
   const vals = () => Object.fromEntries([...vars].map(([k, v]) => [k, formatNumber(v.value, dp[k])]));
-  const set = (name, latex, value, id) => {
+  const set = (name, latex, value, id, unit = {}) => {
     if (dp[name] != null) value = Number(value.toFixed(dp[name]));
-    vars.set(name, { value, latex, id });
+    vars.set(name, { value, latex, id, unit });
   };
+  // unit of a fully known part, from its variables' units; extra: { name: unit } for a probe unknown
+  const unitOf = (t, extra = {}) => {
+    const { occ } = scan(t), names = [...new Set(occ.map(o => o.name))];
+    const ph = Object.fromEntries(names.map((n, i) => [n, `\\mathrm{qq${String.fromCharCode(97 + Math.floor(i / 26))}${String.fromCharCode(97 + i % 26)}}`]));
+    const back = Object.fromEntries(names.map(n => [ph[n].slice(8, -1), n]));
+    try { return unitOfJson(ce.parse(join(substitute(t, occ, ph)), { canonical: false }).json, s => back[s] ? extra[back[s]] ?? vars.get(back[s])?.unit ?? {} : {}); } catch { return null; }
+  };
+  const withUnit = (num, u) => (u && Object.keys(u).length ? `${num}\\text{ ${formatUnit(u)}}` : num);
   const evalTokens = (t, extra = {}) => {
     const { occ } = scan(t);
     if (occ.some(o => !(o.name in extra) && !vars.has(o.name))) return null;
@@ -335,7 +424,9 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
 
   for (const { id, latex } of eqs) {
     let ghost = '';
-    for (const st of splitTop(stripText(tokenize(latex)), SPLIT_STATEMENT)) {
+    const typedUnit = latex.match(/\\text\{([^}]*)\}\s*$/)?.[1]; // "= 0.107 \text{ 1/deg}" at the end of the line
+    const statements = splitTop(stripText(tokenize(latex)), SPLIT_STATEMENT);
+    for (const [si, st] of statements.entries()) {
       ghost = '';
       const parts = splitTop(st, SPLIT_PART);
       if (parts.length < 2) continue;
@@ -350,16 +441,18 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
       const known = [...rest].reverse().find(x => !unknownsIn(x.s).length);
       const last = rest[rest.length - 1];
       if (target && trailingEmpty && !rest.length) {
-        if (vars.has(target.name)) ghost = formatNumber(vars.get(target.name).value, dp[target.name]);
+        const v = vars.get(target.name);
+        if (v) ghost = withUnit(formatNumber(v.value, dp[target.name]), v.unit);
         continue;
       }
       if (target && known) {
         const value = evalTokens(known.p);
         if (value != null) {
-          set(target.name, target.latex, value, id);
+          const unit = typedUnit != null && known === last && si === statements.length - 1 ? parseUnit(typedUnit) : unitOf(known.p);
+          set(target.name, target.latex, value, id, unit ?? {});
           if (last && !unknownsIn(last.s).length && !PLAIN_NUMBER.test(join(last.p))) {
             const pre = trailingEmpty ? '' : '=';
-            const num = formatNumber(vars.get(target.name).value, dp[target.name]);
+            const num = withUnit(formatNumber(vars.get(target.name).value, dp[target.name]), unit);
             ghost = showWorking && last.s.occ.length ? `${pre}${join(substitute(last.p, last.s.occ, vals()))}=${num}` : pre + num;
           }
           continue;
@@ -368,7 +461,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
       if (!target && trailingEmpty && parts.length === 2 && !unknownsIn(scans[0]).length) {
         const value = evalTokens(parts[0]);
         if (value != null) {
-          const num = formatNumber(value, null);
+          const num = withUnit(formatNumber(value, null), unitOf(parts[0]));
           ghost = showWorking && scans[0].occ.length ? `${join(substitute(parts[0], scans[0].occ, vals()))}=${num}` : num;
         }
         continue;
@@ -394,8 +487,12 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
         return ya == null || yb == null ? NaN : ya - yb;
       });
       if (root == null) continue;
-      set(u, uLatex, root, id);
-      ghost = `\\Rightarrow ${uLatex}=${formatNumber(vars.get(u).value, dp[u])}`;
+      // unit of the unknown: give it a probe unit, see what power p it ends up with on its side,
+      // then unit = (other side / rest of its side)^(1/p)
+      const probe = unitOf(a.p, { [u]: { '#': 1 } }), other = unitOf(b.p);
+      const p = probe?.['#'], unit = p && other ? powU(mulU(other, Object.fromEntries(Object.entries(probe).filter(([n]) => n !== '#')), -1), 1 / p) : {};
+      set(u, uLatex, root, id, unit);
+      ghost = `\\Rightarrow ${uLatex}=${withUnit(formatNumber(vars.get(u).value, dp[u]), unit)}`;
     }
     if (ghost) ghosts[id] = ghost;
   }

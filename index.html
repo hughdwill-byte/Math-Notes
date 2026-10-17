@@ -14,7 +14,7 @@
   }
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
+  html, body { margin: 0; height: 100%; overflow: hidden; } /* only the page and side panes scroll */
   body { font: 13px "Segoe UI", system-ui, sans-serif; color: var(--text); background: var(--canvas); display: flex; flex-direction: column; }
   .icon { font-family: "Material Symbols Outlined"; font-size: 20px; line-height: 1; font-weight: 300; }
 
@@ -55,7 +55,8 @@
 
   /* document */
   #main { flex: 1; display: flex; min-height: 0; }
-  #scroller { flex: 1; overflow: auto; padding: 24px 16px 48px; }
+  #scroller { flex: 1; overflow: auto; padding: 24px 16px 48px; position: relative; } /* keeps MathLive's hidden absolutely-positioned bits inside */
+  #main { overflow: hidden; }
   #page { background: var(--page); width: 816px; max-width: 100%; min-height: 1056px; margin: 0 auto; padding: 72px 96px; box-shadow: 0 1px 3px rgba(0,0,0,.2), 0 0 1px rgba(0,0,0,.1); cursor: text; }
 
   /* one equation per line */
@@ -102,6 +103,7 @@
   #vars td:first-child { cursor: pointer; }
   #vars td:first-child:hover { background: var(--hover); }
   #vars select { font: inherit; height: 24px; }
+  #vars .unit { color: var(--muted); font-size: 12px; }
   #vars h4 { display: flex; align-items: center; justify-content: space-between; margin: 18px 4px 2px; font-size: 13px; }
   #vars h4 button { font-weight: 400; color: var(--brand); }
   #vars .hint { padding: 0 4px 6px; }
@@ -122,7 +124,7 @@
   @media (max-width: 860px) { #page { padding: 24px 16px; min-height: 70vh; } #pane, #sympane { position: fixed; top: 0; bottom: 0; z-index: 5; } #pane { right: 0; } #sympane { left: 0; } }
   @media print {
     #titlebar, #tabs, #ribbon, #pane, #sympane, #status, .ghost { display: none !important; }
-    body, #scroller { background: #fff; overflow: visible; padding: 0; display: block; }
+    html, body, #scroller { background: #fff; overflow: visible; height: auto; padding: 0; display: block; }
     #page { box-shadow: none; padding: 0; width: auto; min-height: 0; }
     .section h2:empty, .label h3:empty { display: none; }
   }

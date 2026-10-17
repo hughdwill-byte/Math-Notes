@@ -21,12 +21,12 @@ r = run(['2^{w}=1024']); assert.ok(Math.abs(r.vars.get('w').value - 10) < 1e-9);
 r = run(['E=mc^{2}']); assert.equal(r.vars.size, 0);
 r = run(['g=9.81','h=20','\\sqrt{2gh}=v']); assert.ok(Math.abs(r.vars.get('v').value-19.809)<1e-3);
 // pasted variable lines
-assert.deepEqual(parseVarLine('m = 5 kg'), { latex: 'm=5\\text{ kg}', nameLatex: 'm', key: 'm', number: 5 });
+assert.deepEqual(parseVarLine('m = 5 kg'), { latex: 'm=5\\text{ kg}', nameLatex: 'm', key: 'm', number: 5, unit: 'kg' });
 assert.equal(parseVarLine('v0: 3.2').latex, 'v_{0}=3.2');
 assert.equal(parseVarLine('theta\t30').latex, '\\theta=30');
 assert.equal(parseVarLine('k_B = 1.380649e-23').latex, 'k_{B}=1.380649\\times10^{-23}');
 assert.equal(parseVarLine('epsilon_0 = 8.85e-12').key, 'epsilon_0');
-assert.equal(parseVarLine('mass = 5'), null);
+assert.equal(parseVarLine('mass = 5').latex, '\\mathrm{mass}=5'); // whole words become multi-letter variables
 assert.equal(parseVarLine('just text'), null);
 // tables: header row, any column order, extra description column, units column
 const eqs = t => parseVariables(t).vars.map(v => v.latex);
@@ -60,11 +60,31 @@ r = run(['\\mathrm{AR}_{wing}=4.544', 'C_{l_{\\alpha_{Wing}}}=0.108',
 assert.equal(r.ghosts[2], '\\frac{0.108}{1+\\frac{0.108}{\\left(\\pi\\cdot 4.544\\right)}}=0.107189065');
 assert.ok(Math.abs(r.vars.get('C_L_{alpha_{Wing}}').value - 0.107189065) < 1e-9);
 assert.equal(run(['A=2', 'R=3', 'x=AR']).vars.get('x').value, 6); // without an AR variable it is still A times R
+// units: carried by variables, combined through the maths, shown after the answer
+r = run(['m=1200\\text{ kg}', 'v=25\\text{ m/s}', 'p=mv', 'E=\\frac{1}{2}mv^{2}', 't=10\\text{ s}', 'a=\\frac{v}{t}', 'x=m+v']);
+assert.equal(r.ghosts[2], '=1200\\cdot 25=30000\\text{ kg·m/s}');
+assert.equal(r.ghosts[3], '=\\frac{1}{2}\\cdot 1200\\cdot 25^{2}=375000\\text{ kg·m²/s²}');
+assert.equal(r.ghosts[5], '=\\frac{25}{10}=2.5\\text{ m/s²}');
+assert.equal(r.ghosts[6], '=1200+25=1225'); // kg + m/s: no sensible unit, so none shown
+// angles count as dimensionless when adding: the lift-slope formula keeps 1/deg
+r = run(['\\mathrm{AR}_{wing}=4.544', 'C_{l}=0.108\\text{ 1/deg}', 'C_{L}=\\frac{C_{l}}{1+\\frac{C_{l}}{\\left(\\pi AR_{wing}\\right)}}=']);
+assert.equal(r.ghosts[2], '\\frac{0.108}{1+\\frac{0.108}{\\left(\\pi\\cdot 4.544\\right)}}=0.107189065\\text{ 1/deg}');
+// an answer typed with a unit keeps it; a solved unknown gets its unit from the equation
+r = run(['F=600\\text{ N}', 'm=1200\\text{ kg}', 'F=ma', 'q=5\\text{ mm}', 'w=q']);
+assert.equal(r.ghosts[2], '\\Rightarrow a=0.5\\text{ N/kg}');
+assert.equal(r.ghosts[4], '=5=5\\text{ mm}');
+// Excel: name with unit in brackets, value in the next column
+const xl = 'Temp (K)\t290.15\r\nPressure (Pa)\t101690\r\nR (J/kg·K)\t287\r\nρ (kg/m^3)\t1.221\r\nu_0 (m/s)\t35\r\nS wing (m^2)\t0.05425\r\nλ\t0.752\r\nc_bar (m)\t0.1102\r\nQ·S·c_bar (N·m)\t4.473\r\nSting Height h (m)\t0.705\r\nM_S (N·m)\t3.27';
+assert.deepEqual(eqs(xl), ['\\mathrm{Temp}=290.15\\text{ K}', '\\mathrm{Pressure}=101690\\text{ Pa}', 'R=287\\text{ J/kg·K}', '\\rho=1.221\\text{ kg/m³}',
+  'u_{0}=35\\text{ m/s}', 'S_{wing}=0.05425\\text{ m²}', '\\lambda=0.752', 'c_{bar}=0.1102\\text{ m}', 'h=0.705\\text{ m}', 'M_{S}=3.27\\text{ N·m}']);
+assert.deepEqual(parseVariables(xl).skipped, ['Q·S·c_bar (N·m)  4.473']);
+r = run(['\\mathrm{Pressure}=101690\\text{ Pa}', 'R=287\\text{ J/kg·K}', '\\mathrm{Temp}=290.15\\text{ K}', '\\rho=\\frac{Pressure}{RTemp}']);
+assert.equal(r.ghosts[3], '=\\frac{101690}{287\\cdot 290.15}=1.22116339\\text{ Pa·kg/J}'); // typed words match; units combine
 assert.deepEqual(parseVariables('Symbol\tValue\nm\t5\nTotal\tTBC').skipped, ['Total  TBC']);
 // units are ignored in maths; universal constants are known from the start and can be overridden
 r = run(['m=5\\text{ kg}', 'F=mg']);
 assert.equal(r.vars.get('F'), undefined);
-r = evaluateDocument(ce, [{ id: 0, latex: 'm=5\\text{ kg}' }, { id: 1, latex: 'F=mg' }, { id: 2, latex: 'g=10' }, { id: 3, latex: 'W=mg' }], {}, true, [{ key: 'g', latex: 'g', value: 9.81 }]);
-assert.ok(Math.abs(r.vars.get('F').value - 49.05) < 1e-9); assert.equal(r.ghosts[1], '=5\\cdot 9.81=49.05');
+r = evaluateDocument(ce, [{ id: 0, latex: 'm=5\\text{ kg}' }, { id: 1, latex: 'F=mg' }, { id: 2, latex: 'g=10' }, { id: 3, latex: 'W=mg' }], {}, true, [{ key: 'g', latex: 'g', value: 9.81, unit: 'm/s^2' }]);
+assert.ok(Math.abs(r.vars.get('F').value - 49.05) < 1e-9); assert.equal(r.ghosts[1], '=5\\cdot 9.81=49.05\\text{ kg·m/s²}');
 assert.equal(r.vars.get('W').value, 50);
 console.log('ok');
