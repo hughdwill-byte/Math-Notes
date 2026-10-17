@@ -165,24 +165,89 @@ function stripText(t) {
 }
 
 const GREEK_WORD = new RegExp(`^(${[...GREEK].map(g => g.slice(1)).join('|')}|pi)$`);
-// "m = 5 kg", "v0: 3.2", "theta\t30" (pasted from Word/Excel) -> { latex, key, number }
-export function parseVarLine(line) {
-  const m = line.trim().match(/^([A-Za-z\\][\w\\{}]*)\s*(?:=|:|\t)\s*(.+)$/);
-  if (!m) return null;
-  let [, name, value] = m;
-  const n = name.replace(/[{}\\]/g, '').match(/^([A-Za-z]+?)(?:_?(\d+|_[A-Za-z0-9]+))?$/);
+const UNICODE_GREEK = { α: 'alpha', β: 'beta', γ: 'gamma', δ: 'delta', ε: 'epsilon', ζ: 'zeta', η: 'eta', θ: 'theta', ι: 'iota', κ: 'kappa',
+  λ: 'lambda', μ: 'mu', ν: 'nu', ξ: 'xi', π: 'pi', ρ: 'rho', σ: 'sigma', τ: 'tau', υ: 'upsilon', φ: 'phi', χ: 'chi', ψ: 'psi', ω: 'omega',
+  Γ: 'Gamma', Δ: 'Delta', Θ: 'Theta', Λ: 'Lambda', Ξ: 'Xi', Π: 'Pi', Σ: 'Sigma', Φ: 'Phi', Ψ: 'Psi', Ω: 'Omega' };
+const SUB_DIGITS = '₀₁₂₃₄₅₆₇₈₉', SUP = { '⁰': 0, '¹': 1, '²': 2, '³': 3, '⁴': 4, '⁵': 5, '⁶': 6, '⁷': 7, '⁸': 8, '⁹': 9, '⁻': '-', '⁺': '+' };
+
+// "v0", "C_L", "CL", "ρ", "theta", "\alpha_1" -> { nameLatex, key }, or null if it doesn't look like a symbol
+export function varName(cell) {
+  let s = cell.trim().replace(/^\$|\$$/g, '').replace(/\s+/g, '')
+    .replace(/[α-ωΓ-Ω]/g, c => UNICODE_GREEK[c] ? UNICODE_GREEK[c] + '_' : c)
+    .replace(/[₀-₉]+/g, d => '_' + [...d].map(c => SUB_DIGITS.indexOf(c)).join(''))
+    .replace(/[{}\\]/g, '').replace(/_+/g, '_').replace(/_$/, '');
+  const n = s.match(/^([A-Za-z]+?)(?:_?(\d+)|_([A-Za-z0-9]+))?$/);
   if (!n) return null;
-  const base = GREEK_WORD.test(n[1]) ? '\\' + n[1] : n[1];
-  if (base.length > 1 && base[0] !== '\\') return null; // multi-letter names would read as products
-  const sub = n[2]?.replace(/^_/, '');
-  const nameLatex = sub ? `${base}_{${sub}}` : base;
-  const num = value.trim().match(/^(-?\d*\.?\d+)(?:[eE]([-+]?\d+))?\s*(.*)$/);
-  let valueLatex = value.trim(), number = null;
-  if (num) {
-    number = Number(num[1] + (num[2] ? 'e' + num[2] : ''));
-    valueLatex = (num[2] ? `${num[1]}\\times10^{${parseInt(num[2])}}` : num[1]) + (num[3] ? `\\text{ ${num[3].replace(/[{}\\]/g, '')}}` : '');
+  let [, base, sub = n[3]] = n;
+  if (GREEK_WORD.test(base)) base = '\\' + base;
+  else if (base.length > 1) {
+    // "CL" -> C_L, "Re" -> R_e; longer words are descriptions, not symbols
+    if (base.length > 3 || sub) return null;
+    [base, sub] = [base[0], base.slice(1)];
   }
-  return { latex: `${nameLatex}=${valueLatex}`, nameLatex, key: scan(tokenize(nameLatex)).occ[0]?.name, number };
+  const nameLatex = sub ? `${base}_{${sub}}` : base;
+  const key = scan(tokenize(nameLatex)).occ[0]?.name;
+  return key ? { nameLatex, key } : null;
+}
+
+// "1,200", "−3.5", "1.2e-5", "1.2 × 10^-5", "2.5×10⁻³ kg" -> { number, latex, rest } (rest = trailing text, e.g. a unit)
+export function varValue(cell) {
+  const s = cell.trim().replace(/[−–]/g, '-').replace(/(\d),(?=\d{3}\b)/g, '$1')
+    .replace(/[⁰-⁹⁻⁺¹²³]+/g, d => [...d].map(c => SUP[c]).join(''))
+    .replace(/\s*[x×*]\s*10\s*\^?\s*\(?([-+]?\d+)\)?/, 'e$1');
+  const m = s.match(/^(-?\d*\.?\d+)(?:[eE]([-+]?\d+))?\s*(.*)$/);
+  if (!m) return null;
+  return { number: Number(m[1] + (m[2] ? 'e' + m[2] : '')), latex: m[2] ? `${m[1]}\\times10^{${parseInt(m[2])}}` : m[1], rest: m[3] };
+}
+
+function makeVar(nameCell, valueCell, unitCell = '') {
+  const name = varName(nameCell), value = varValue(valueCell);
+  if (!name) return null;
+  if (!value) return { latex: `${name.nameLatex}=${valueCell.trim()}`, ...name, number: null }; // an expression
+  const unit = (unitCell.trim() || value.rest).replace(/^[([]\s*|\s*[)\]]$/g, '').replace(/[{}\\]/g, '').trim();
+  const unitLatex = unit && unit !== '-' && unit !== '–' ? `\\text{ ${unit}}` : '';
+  return { latex: `${name.nameLatex}=${value.latex}${unitLatex}`, ...name, number: value.number };
+}
+
+// "m = 5 kg", "v0: 3.2" -> { latex, nameLatex, key, number }
+export function parseVarLine(line) {
+  const m = line.trim().match(/^([^=:\t]+?)\s*(?:=|:|\t)\s*(.+)$/);
+  return m ? makeVar(m[1], m[2]) : null;
+}
+
+// A table (rows of cells) with a symbol column, a value column and optionally a units column, in any
+// order, with or without a header row; other columns (descriptions...) are ignored.
+function parseTable(rows) {
+  const width = Math.max(...rows.map(r => r.length));
+  const col = i => rows.map(r => r[i] ?? '');
+  const head = rows[0].some(c => /symbol|variable|name|param|value|unit/i.test(c)) && !rows[0].some(c => varValue(c)) ? rows[0] : null;
+  const data = head ? rows.slice(1) : rows;
+  const find = re => head ? head.findIndex(c => re.test(c)) : -1;
+  const frac = (i, f) => data.filter(r => f(r[i] ?? '')).length / data.length;
+  const cols = [...Array(width).keys()];
+  let value = find(/value|magnitude|amount|number|\bval\b/i);
+  if (value < 0) value = cols.reduce((b, i) => frac(i, varValue) > frac(b, varValue) ? i : b, 0);
+  let name = [/symbol/i, /variable|param/i, /name/i].map(find).find(i => i >= 0 && i !== value) ?? -1;
+  if (name < 0) name = cols.filter(i => i !== value).reduce((b, i) => b < 0 || frac(i, c => varName(c)) > frac(b, c => varName(c)) ? i : b, -1);
+  let unit = find(/unit/i);
+  if (unit < 0 && !head && value + 1 < width && value + 1 !== name && frac(value + 1, c => c.trim().length <= 12 && !varValue(c)) >= .5) unit = value + 1;
+  const vars = [], skipped = [];
+  for (const r of data) {
+    const v = name >= 0 ? makeVar(r[name] ?? '', r[value] ?? '', unit >= 0 ? r[unit] ?? '' : '') : null;
+    if (v && v.number != null) vars.push(v); else skipped.push(r.join('  '));
+  }
+  return { vars, skipped };
+}
+
+// Pasted text -> { vars, skipped }. Handles "name = value" lines and tables from Excel/Word/web (tab separated)
+// or Markdown (| separated).
+export function parseVariables(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim() && !/^\s*\|?[\s:|-]+\|?\s*$/.test(l));
+  if (!lines.length) return { vars: [], skipped: [] };
+  if (lines.every(l => l.includes('\t')) || lines.every(l => l.includes('|')))
+    return parseTable(lines.map(l => (l.includes('\t') ? l.split('\t') : l.replace(/^\s*\||\|\s*$/g, '').split('|')).map(c => c.trim())));
+  const parsed = lines.map(parseVarLine);
+  return { vars: parsed.filter(Boolean), skipped: lines.filter((_, i) => !parsed[i]) };
 }
 
 // Walk the equations in document order. eqs: [{id, latex}]; dp: {name: places};

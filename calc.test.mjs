@@ -1,7 +1,7 @@
 // Engine check: npm i @cortex-js/compute-engine@0.58.0 && node calc.test.mjs
 import assert from 'node:assert';
 import { ComputeEngine } from '@cortex-js/compute-engine';
-import { evaluateDocument, parseVarLine } from './calc.js';
+import { evaluateDocument, parseVarLine, parseVariables } from './calc.js';
 const ce = new ComputeEngine();
 const run = (ls, dp = {}, w = true) => evaluateDocument(ce, ls.map((latex, i) => ({ id: i, latex })), dp, w);
 let r = run(['y=10', 'z=2', 'x=\\frac{y}{z}']);
@@ -28,6 +28,14 @@ assert.equal(parseVarLine('k_B = 1.380649e-23').latex, 'k_{B}=1.380649\\times10^
 assert.equal(parseVarLine('epsilon_0 = 8.85e-12').key, 'epsilon_0');
 assert.equal(parseVarLine('mass = 5'), null);
 assert.equal(parseVarLine('just text'), null);
+// tables: header row, any column order, extra description column, units column
+const eqs = t => parseVariables(t).vars.map(v => v.latex);
+assert.deepEqual(eqs('Symbol\tValue\tUnits\nm\t1,200\tkg\nv0\t25\tm/s\nρ\t1.225\tkg/m^3'), ['m=1200\\text{ kg}', 'v_{0}=25\\text{ m/s}', '\\rho=1.225\\text{ kg/m^3}']);
+assert.deepEqual(eqs('Description\tValue\tUnit\tSymbol\nMass of car\t1200\tkg\tm\nLift coefficient\t0.45\t-\tCL'), ['m=1200\\text{ kg}', 'C_{L}=0.45']);
+assert.deepEqual(eqs('g\t9.81\tm/s²\nS\t16.2\t(m²)\nE\t2.1×10⁻³\tPa'), ['g=9.81\\text{ m/s²}', 'S=16.2\\text{ m²}', 'E=2.1\\times10^{-3}\\text{ Pa}']);
+assert.deepEqual(eqs('| Name | Value | Units |\n|---|---|---|\n| h_0 | 0.25 | |\n| alpha | 5 | deg |'), ['h_{0}=0.25', '\\alpha=5\\text{ deg}']);
+assert.deepEqual(eqs('m = 5 kg\nv0: 3\ntheta\t30'), ['m=5\\text{ kg}', 'v_{0}=3', '\\theta=30']); // mixed list
+assert.deepEqual(parseVariables('Symbol\tValue\nm\t5\nTotal\tTBC').skipped, ['Total  TBC']);
 // units are ignored in maths; universal constants are known from the start and can be overridden
 r = run(['m=5\\text{ kg}', 'F=mg']);
 assert.equal(r.vars.get('F'), undefined);

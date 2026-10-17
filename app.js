@@ -1,6 +1,6 @@
 import { MathfieldElement, convertLatexToMarkup, convertLatexToMathMl } from 'https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.mjs';
 import { ComputeEngine } from 'https://cdn.jsdelivr.net/npm/@cortex-js/compute-engine@0.58.0/dist/compute-engine.min.esm.js';
-import { evaluateDocument, formatNumber, parseVarLine } from './calc.js';
+import { evaluateDocument, formatNumber, parseVarLine, parseVariables } from './calc.js';
 
 const ce = new ComputeEngine();
 const $ = s => document.querySelector(s);
@@ -254,11 +254,13 @@ function saveProject() {
 }
 
 // several "name = value" lines (or name<tab>value rows from Excel) -> equation blocks, else null
+// several "name = value" lines or a pasted table -> equation blocks, else null (an ordinary paste)
 function parseVarList(text) {
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  if (lines.length < 2 && !/\t/.test(text)) return null;
-  const parsed = lines.map(parseVarLine);
-  return parsed.every(Boolean) ? parsed.map(p => ({ eq: p.latex })) : null;
+  if (!/\n|\t/.test(text.trim())) return null;
+  const { vars, skipped } = parseVariables(text);
+  if (!vars.length) return null;
+  if (skipped.length) flash(`Skipped ${skipped.length} row${skipped.length > 1 ? 's' : ''} without a symbol and number: ${skipped.join('; ').slice(0, 120)}`);
+  return vars.map(v => ({ eq: v.latex }));
 }
 
 const universalList = () => settings.universals.split('\n').map(parseVarLine).filter(u => u?.key && u.number != null);
@@ -500,13 +502,11 @@ function ask(title, hint, text = '') {
 }
 
 async function pasteVariables(ref = current) {
-  const text = await ask('Paste variables', 'One per line, e.g. "m = 5 kg" or "v0: 3.2". Rows copied from Excel or a Word table work too. Each becomes an equation line you can use below it.');
+  const text = await ask('Paste variables', 'Paste a table copied from Excel, Word or a web page (a symbol column, a value column and optionally a units column, in any order, header row optional), or type one per line like "m = 5 kg". Each becomes an equation line you can use below it.');
   if (!text?.trim()) return;
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  const parsed = lines.map(parseVarLine);
-  const bad = lines.filter((_, i) => !parsed[i]);
-  if (bad.length) alert(`These lines weren't understood and were skipped:\n${bad.join('\n')}\n\nUse single-letter names (with an optional subscript like v_0 or Greek like theta).`);
-  if (parsed.some(Boolean)) pasteBlocks(parsed.filter(Boolean).map(p => ({ eq: p.latex })), ref?.isConnected ? ref : doc.lastElementChild);
+  const { vars, skipped } = parseVariables(text);
+  if (skipped.length) alert(`These rows weren't understood and were skipped:\n${skipped.join('\n')}\n\nEach needs a symbol (like m, v0, C_L, ρ or theta) and a number.`);
+  if (vars.length) pasteBlocks(vars.map(v => ({ eq: v.latex })), ref?.isConnected ? ref : doc.lastElementChild);
 }
 
 async function editUniversals() {
