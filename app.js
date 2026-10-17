@@ -77,6 +77,7 @@ function makeEq(latex = '', base) {
     else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { stop(); addSection(w); }
     else if (e.key === 'Enter') { stop(); addEq(w); }
     else if (e.key === 'Backspace' && !mf.value) { stop(); removeBlock(w); }
+    else if (/^[=+\-*<>,;]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) leaveScripts(mf);
   }, { capture: true });
   for (const type of ['copy', 'cut']) mf.addEventListener(type, e => {
     const sel = mf.selection.ranges[0], collapsed = sel[0] === sel[1];
@@ -95,6 +96,18 @@ function makeEq(latex = '', base) {
     e.preventDefault(); e.stopPropagation();
   }, { capture: true });
   return w;
+}
+
+// Like Word: an operator typed in a subscript/superscript goes back to the main line first
+// (C_M= gives C_M =, not C_{M=}). An empty script keeps it, so x^-1 still works.
+// ponytail: uses MathLive's internal model (pinned 0.110.0); recheck if MathLive is upgraded
+function leaveScripts(mf) {
+  const model = mf._mathfield?.model;
+  for (let i = 0; i < 5; i++) {
+    const atom = model?.at(model.position);
+    if (!/^(subscript|superscript)$/.test(atom?.parentBranch) || atom.type === 'first') return;
+    mf.executeCommand('moveAfterParent');
+  }
 }
 
 function makeSection(title = '') {
