@@ -5,6 +5,8 @@ An equations-only notebook in a Word-style window, hosted on GitHub Pages.
 - Every line is an equation. **Enter** starts the next one; just type: `/` makes a fraction, `^` a power, `_` a subscript, `sqrt`, `pi`, `\alpha`, etc.
 - Like Word, a space or an operator (`=`, `+`, `-`, …) typed in a subscript or power takes you back to the main line: `C_M=C_L` stays `C_M = C_L`. Use brackets to keep operators in a power: `e^(x+1)`.
 - **Ctrl+Enter** (or Home → New section) adds a section: a line with a heading under it. Enter after the heading goes straight to an equation.
+- **Ctrl+Shift+Enter** (or Home → New label) adds a label: a smaller subheading for one equation or a group of equations. Ctrl+C on a label, or right-click → Copy labelled part, copies just that group.
+- **Matrices** of any size: Home → New matrix… (or Symbols → Matrix → Custom size…). Inside a matrix, Enter adds a row; Home → Matrix (or right-click) adds/removes rows and columns.
 - **Backspace** on an empty line deletes it; Home → Delete line deletes the current line.
 - Variables are remembered top to bottom. Type `x=y/z` and a grey `= 10/2 = 5` appears; **Tab** fills it in. Filled-in numbers stay live: changing decimal places or an earlier value updates them on the page.
 - Untick **Show working step** to go straight to the answer (`= 5`).

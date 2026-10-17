@@ -76,6 +76,9 @@
   .section h2 { font: 400 15pt Calibri, Carlito, "Segoe UI", sans-serif; color: var(--heading); margin: 0; outline: none; padding: 2px 0; }
   .section h2:empty::before { content: "Section heading"; color: #a19f9d; }
   .section:focus-within hr { border-top-color: var(--brand); }
+  .label { margin: 12px 0 0; }
+  .label h3 { font: 600 11.5pt Calibri, Carlito, "Segoe UI", sans-serif; color: #404040; margin: 0; outline: none; padding: 2px 0; }
+  .label h3:empty::before { content: "Label"; color: #a19f9d; font-weight: 400; }
 
   /* variables pane */
   #pane { width: 280px; background: #fff; border-left: 1px solid var(--line); display: flex; flex-direction: column; flex: none; }
@@ -121,7 +124,7 @@
     #titlebar, #tabs, #ribbon, #pane, #sympane, #status, .ghost { display: none !important; }
     body, #scroller { background: #fff; overflow: visible; padding: 0; display: block; }
     #page { box-shadow: none; padding: 0; width: auto; min-height: 0; }
-    .section h2:empty { display: none; }
+    .section h2:empty, .label h3:empty { display: none; }
   }
 </style>
 </head>
@@ -148,7 +151,8 @@
     <div class="group"><div class="body">
       <button class="big" data-act="newEq" title="New equation below (Enter)"><span class="icon">add</span>New<br>equation</button>
       <button class="big" data-act="newSection" title="New section: a line with a heading (Ctrl+Enter)"><span class="icon">horizontal_rule</span>New<br>section</button>
- <button class="big" data-act="pasteVariables" title="Paste a list of variables (e.g. m = 5 kg, one per line)"><span class="icon">playlist_add</span>Paste<br>variables</button>
+<button class="big" data-act="newLabel" title="New label: a subheading for an equation or group of equations (Ctrl+Shift+Enter)"><span class="icon">label</span>New<br>label</button>
+      <button class="big" data-act="pasteVariables" title="Paste a list of variables (e.g. m = 5 kg, one per line)"><span class="icon">playlist_add</span>Paste<br>variables</button>
       <button class="big" data-act="deleteLine" title="Delete this equation or section"><span class="icon">delete</span>Delete<br>line</button>
     </div><div class="label">Insert</div></div>
     <div class="group"><div class="body"><div class="rows">
@@ -160,6 +164,17 @@
       </div>
       <button data-act="accept" title="Fill in the grey suggestion (Tab)"><span class="icon">keyboard_tab</span>Fill in answer</button>
     </div></div><div class="label">Calculation</div></div>
+    <div class="group"><div class="body"><div class="rows">
+      <button data-act="customMatrix" title="Insert a matrix of any size"><span class="icon">grid_on</span>New matrix…</button>
+      <div class="row">
+        <button data-act="addRow" title="Add a row below (or press Enter inside a matrix)"><span class="icon">table_rows</span>+ Row</button>
+        <button data-act="delRow" title="Remove this row"><span class="icon">remove</span>Row</button>
+      </div>
+      <div class="row">
+        <button data-act="addCol" title="Add a column to the right"><span class="icon">view_column</span>+ Column</button>
+        <button data-act="delCol" title="Remove this column"><span class="icon">remove</span>Column</button>
+      </div>
+    </div></div><div class="label">Matrix</div></div>
   </div>
 
 
@@ -190,7 +205,7 @@
   <span id="eq-count">0 equations</span>
   <span id="var-count">0 variables</span>
   <span class="spacer"></span>
-  <span>Enter: next equation · Ctrl+Enter: new section · Tab: fill suggestion · Right-click: copy section</span>
+  <span>Enter: next equation · Ctrl+Enter: new section · Ctrl+Shift+Enter: label · Tab: fill suggestion · Right-click: copy section</span>
 </div>
 
  <dialog id="dlg"><form method="dialog">

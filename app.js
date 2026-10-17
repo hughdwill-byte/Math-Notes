@@ -74,7 +74,9 @@ function makeEq(latex = '', base) {
   mf.addEventListener('keydown', e => {
     const stop = () => { e.preventDefault(); e.stopPropagation(); };
     if (e.key === 'Tab' && !e.shiftKey && w.dataset.ghost) { stop(); accept(w); }
+    else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.shiftKey) { stop(); addLabel(w); }
     else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { stop(); addSection(w); }
+    else if (e.key === 'Enter' && inMatrix(mf)) { stop(); mf.executeCommand('addRowAfter'); schedule(); }
     else if (e.key === 'Enter') { stop(); addEq(w); }
     else if (e.key === 'Backspace' && !mf.value) { stop(); removeBlock(w); }
     else if (/^[=+\-*<>,;]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) leaveScripts(mf);
@@ -110,16 +112,44 @@ function leaveScripts(mf) {
   }
 }
 
-function makeSection(title = '') {
+// A section is a line with a heading; a label is a smaller subheading (no line) for an equation or group.
+function inMatrix(mf) {
+  const model = mf._mathfield?.model;
+  for (let a = model?.at(model.position); a; a = a.parent) if (a.type === 'array') return true;
+  return false;
+}
+
+// rows x cols matrix of empty boxes; env is pmatrix ( ), bmatrix [ ] or vmatrix | |
+const matrix = (r, c, env = 'bmatrix') =>
+  `\\begin{${env}}${Array.from({ length: r }, () => Array(c).fill('#?').join('&')).join('\\\\')}\\end{${env}}`;
+
+function customMatrix() {
+  const size = prompt('Matrix size (rows × columns), e.g. 3x4:', '3x3');
+  const m = size?.match(/(\d+)\s*[x×*, ]\s*(\d+)/i);
+  if (!m) return;
+  const r = Math.min(+m[1], 20), c = Math.min(+m[2], 20);
+  if (r > 0 && c > 0) insertIntoEq(matrix(r, c));
+}
+
+// add/remove rows and columns of the matrix the caret is in
+function matrixCmd(cmd, mf = lastEq()?.firstChild) {
+  if (!mf) return;
+  mf.focus();
+  if (!inMatrix(mf)) return alert('Click inside a matrix first.');
+  mf.executeCommand(cmd);
+  schedule();
+}
+
+function makeSection(title = '', label = false) {
   const s = document.createElement('div');
-  s.className = 'section';
-  const h = document.createElement('h2');
+  s.className = label ? 'label' : 'section';
+  const h = document.createElement(label ? 'h3' : 'h2');
   h.contentEditable = 'plaintext-only';
   h.textContent = title;
-  s.append(document.createElement('hr'), h);
+  if (label) s.append(h); else s.append(document.createElement('hr'), h);
   h.addEventListener('focus', () => { current = s; updateDpLabel(); });
   h.addEventListener('input', schedule);
-  h.addEventListener('copy', e => { e.preventDefault(); copySection(s); }); // Ctrl+C on a heading copies its section
+  h.addEventListener('copy', e => { e.preventDefault(); label ? copyBlocks(groupOf(s)) : copySection(s); }); // Ctrl+C on a heading copies what's under it
   h.addEventListener('keydown', e => {
     const o = getSelection().anchorOffset, len = h.textContent.length;
     if (e.key === 'Enter') { e.preventDefault(); addEq(s); }
@@ -137,7 +167,7 @@ function focusBlock(b, atEnd = false) {
     mf.focus();
     mf.position = atEnd ? mf.lastOffset : 0;
   } else {
-    const h = b.querySelector('h2');
+    const h = b.querySelector('h2, h3');
     h.focus();
     getSelection().selectAllChildren(h);
     getSelection().collapseToEnd();
@@ -146,7 +176,9 @@ function focusBlock(b, atEnd = false) {
 
 const after = (ref, node) => (ref?.isConnected ? ref.after(node) : doc.append(node), node);
 function addEq(ref = current, latex = '') { const w = after(ref, makeEq(latex)); focusBlock(w); schedule(); return w; }
-function addSection(ref = current) { const s = after(ref, makeSection()); focusBlock(s); schedule(); return s; }
+function addSection(ref = current, label = false) { const s = after(ref, makeSection('', label)); focusBlock(s); schedule(); return s; }
+const addLabel = (ref = current) => addSection(ref, true);
+const makeBlock = b => b.section != null ? makeSection(b.section) : b.label != null ? makeSection(b.label, true) : makeEq(b.eq, b.base);
 
 function removeBlock(b) {
   if (!b?.isConnected) return;
@@ -276,6 +308,7 @@ function bumpDp(delta) {
 // ---------- saving / loading ----------
 const serialize = () => blocks().map(b => b.classList.contains('eq')
   ? { eq: b.firstChild.value, base: b.dataset.base }
+  : b.classList.contains('label') ? { label: b.querySelector('h3').textContent }
   : { section: b.querySelector('h2').textContent });
 
 // also reads the older HTML format (equations and headings kept, other text dropped)
@@ -283,12 +316,12 @@ function fromHtml(html) {
   const t = document.createElement('template');
   t.innerHTML = html;
   return [...t.content.querySelectorAll('[data-latex], h1, h2, h3')].map(el =>
-    el.dataset.latex != null ? { eq: el.dataset.latex } : { section: el.textContent.trim() });
+    el.dataset.latex != null ? { eq: el.dataset.latex } : el.tagName === 'H3' ? { label: el.textContent.trim() } : { section: el.textContent.trim() });
 }
 
 function setDocument(list) {
   if (typeof list === 'string') list = fromHtml(list);
-  doc.replaceChildren(...(list?.length ? list : [{ eq: '' }]).map(b => b.section != null ? makeSection(b.section) : makeEq(b.eq, b.base)));
+  doc.replaceChildren(...(list?.length ? list : [{ eq: '' }]).map(makeBlock));
   current = null;
   recompute();
 }
@@ -371,16 +404,25 @@ function sectionOf(b) {
 const copyAll = () => copyBlocks(blocks());
 const copySection = (b = current) => b?.isConnected && copyBlocks(sectionOf(b));
 
+// a label and the equations under it, down to the next label or section (null if not under a label)
+function groupOf(b) {
+  while (b.previousElementSibling && !b.matches('.label, .section')) b = b.previousElementSibling;
+  if (!b.matches('.label')) return null;
+  const out = [b];
+  for (let n = b.nextElementSibling; n && !n.matches('.label, .section'); n = n.nextElementSibling) out.push(n);
+  return out;
+}
+
 function copyBlocks(els) {
-  const all = serialize(), list = els.map(b => all[blocks().indexOf(b)]).filter(b => b.section != null || b.eq);
+  const all = serialize(), list = els.map(b => all[blocks().indexOf(b)]).filter(b => b.section != null || b.label != null || b.eq);
   copyHtml(
-    list.map(b => b.section != null ? `<hr><h2>${esc(b.section)}</h2>` : `<p>${eqHtml(b.eq)}</p>`).join(''),
-    list.map(b => b.section != null ? `\n${b.section}\n` : b.eq).join('\n'));
+    list.map(b => b.section != null ? `<hr><h2>${esc(b.section)}</h2>` : b.label != null ? `<h3>${esc(b.label)}</h3>` : `<p>${eqHtml(b.eq)}</p>`).join(''),
+    list.map(b => b.section != null ? `\n${b.section}\n` : b.label ?? b.eq).join('\n'));
 }
 
 function pasteBlocks(list, ref) {
   let at = ref;
-  for (const b of list) at = after(at, b.section != null ? makeSection(b.section) : makeEq(b.eq, b.base));
+  for (const b of list) at = after(at, makeBlock(b));
   if (ref?.classList.contains('eq') && !ref.firstChild.value) ref.remove();
   focusBlock(at, true);
   schedule();
@@ -420,6 +462,12 @@ async function editUniversals() {
 const actions = {
   newEq: () => addEq(),
   newSection: () => addSection(),
+  newLabel: () => addLabel(),
+  addRow: () => matrixCmd('addRowAfter'),
+  addCol: () => matrixCmd('addColumnAfter'),
+  delRow: () => matrixCmd('removeRow'),
+  delCol: () => matrixCmd('removeColumn'),
+  customMatrix,
   deleteLine: () => removeBlock(current),
   copyAll,
   pasteVariables: () => pasteVariables(),
@@ -471,17 +519,25 @@ $('#page').addEventListener('click', e => {
 
 // right-click menu on any line (replaces MathLive's own menu)
 doc.addEventListener('contextmenu', e => {
-  const b = e.target.closest?.('.eq, .section');
+  const b = e.target.closest?.('.eq, .section, .label');
   if (!b) return;
   e.preventDefault(); e.stopPropagation();
   current = b;
   const eq = b.classList.contains('eq') && b.firstChild.value;
   openMenu(b, [
     ...(eq ? [['function', 'Copy equation', () => copyHtml(eqHtml(eq), mathml(eq))]] : []),
+    ...(groupOf(b) ? [['label', 'Copy labelled part', () => copyBlocks(groupOf(b))]] : []),
     ['content_copy', 'Copy section', () => copySection(b)],
     ['select_all', 'Copy all', copyAll],
     ['add', 'New equation below', () => addEq(b)],
     ['horizontal_rule', 'New section below', () => addSection(b)],
+    ['label', 'New label below', () => addLabel(b)],
+    ...(eq && eq.includes('\\begin{') ? [
+      ['table_rows', 'Matrix: add row', () => matrixCmd('addRowAfter', b.firstChild)],
+      ['view_column', 'Matrix: add column', () => matrixCmd('addColumnAfter', b.firstChild)],
+      ['remove', 'Matrix: remove row', () => matrixCmd('removeRow', b.firstChild)],
+      ['remove', 'Matrix: remove column', () => matrixCmd('removeColumn', b.firstChild)],
+    ] : []),
     ['playlist_add', 'Paste variables here…', () => pasteVariables(b)],
     ['delete', 'Delete line', () => removeBlock(b)],
   ], true, { left: e.clientX, bottom: e.clientY });
@@ -532,7 +588,7 @@ const STRUCTURES = {
   Function: ['\\sin\\theta', ['\\sin\\left(#0\\right)', '\\cos\\left(#0\\right)', '\\tan\\left(#0\\right)', '\\sin^{-1}\\left(#0\\right)', '\\cos^{-1}\\left(#0\\right)', '\\tan^{-1}\\left(#0\\right)', '\\sinh\\left(#0\\right)', '\\cosh\\left(#0\\right)']],
   Accent: ['\\ddot{a}', ['\\dot{#0}', '\\ddot{#0}', '\\hat{#0}', '\\bar{#0}', '\\vec{#0}', '\\overline{#0}', '\\tilde{#0}', "#0'"]],
   'Limit and Log': ['\\lim_{n\\to\\infty}', ['\\log_{#?}\\left(#0\\right)', '\\ln\\left(#0\\right)', '\\log\\left(#0\\right)', '\\lim_{#?\\to#?}#0', '\\lim_{x\\to\\infty}#0', 'e^{#0}', '#0!', '\\binom{#?}{#?}']],
-  Matrix: ['\\begin{bmatrix}1&0\\\\0&1\\end{bmatrix}', ['\\begin{pmatrix}#?&#?\\\\#?&#?\\end{pmatrix}', '\\begin{bmatrix}#?&#?\\\\#?&#?\\end{bmatrix}', '\\begin{vmatrix}#?&#?\\\\#?&#?\\end{vmatrix}', '\\begin{pmatrix}#?&#?&#?\\\\#?&#?&#?\\\\#?&#?&#?\\end{pmatrix}']],
+  Matrix: ['\\begin{bmatrix}1&0\\\\0&1\\end{bmatrix}', [matrix(2, 2), matrix(3, 3), matrix(2, 2, 'pmatrix'), matrix(3, 3, 'pmatrix'), matrix(2, 2, 'vmatrix'), matrix(3, 3, 'vmatrix'), matrix(1, 3), matrix(3, 1), '\\text{Custom size…}']],
 };
 const SYMBOLS = {
   'Basic maths': '\\pm \\mp \\times \\div \\cdot \\neq \\approx \\equiv \\le \\ge \\ll \\gg \\propto \\infty \\degree \\% \\sqrt{#0} #0^{2} #0^{3} #0^{-1} \\frac{#0}{#?} \\left|#0\\right| #0! \\pi',
@@ -551,7 +607,7 @@ $('#symbols').innerHTML = '<h3>Structures</h3><div class="grid wide">' +
 $('#symbols').addEventListener('click', e => {
   const b = e.target.closest('button');
   if (b?.dataset.ins) insertIntoEq(b.dataset.ins);
-  if (b?.dataset.struct) openMenu(b, STRUCTURES[b.dataset.struct][1].map(l => ['', l.replace(/#0|#\?/g, '\\square'), () => insertIntoEq(l)]));
+  if (b?.dataset.struct) openMenu(b, STRUCTURES[b.dataset.struct][1].map(l => ['', l.replace(/#0|#\?/g, '\\square'), () => l.startsWith('\\text{Custom') ? customMatrix() : insertIntoEq(l)]));
 });
 
 document.addEventListener('keydown', e => {
