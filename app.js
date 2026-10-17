@@ -92,6 +92,7 @@ function makeSection(title = '') {
   s.append(document.createElement('hr'), h);
   h.addEventListener('focus', () => { current = s; updateDpLabel(); });
   h.addEventListener('input', schedule);
+  h.addEventListener('copy', e => { e.preventDefault(); copySection(s); }); // Ctrl+C on a heading copies its section
   h.addEventListener('keydown', e => {
     const o = getSelection().anchorOffset, len = h.textContent.length;
     if (e.key === 'Enter') { e.preventDefault(); addEq(s); }
@@ -311,8 +312,19 @@ function copyHtml(html, plain) {
   document.removeEventListener('copy', onCopy, { capture: true });
 }
 
-function copyAll() {
-  const list = serialize().filter(b => b.section != null || b.eq);
+// the section a line belongs to: its heading and every line down to the next heading
+function sectionOf(b) {
+  while (b.previousElementSibling && !b.classList.contains('section')) b = b.previousElementSibling;
+  const out = [b];
+  for (let n = b.nextElementSibling; n && !n.classList.contains('section'); n = n.nextElementSibling) out.push(n);
+  return out;
+}
+
+const copyAll = () => copyBlocks(blocks());
+const copySection = (b = current) => b?.isConnected && copyBlocks(sectionOf(b));
+
+function copyBlocks(els) {
+  const all = serialize(), list = els.map(b => all[blocks().indexOf(b)]).filter(b => b.section != null || b.eq);
   copyHtml(
     list.map(b => b.section != null ? `<hr><h2>${esc(b.section)}</h2>` : `<p>${eqHtml(b.eq)}</p>`).join(''),
     list.map(b => b.section != null ? `\n${b.section}\n` : b.eq).join('\n'));
@@ -333,6 +345,7 @@ const actions = {
   newSection: () => addSection(),
   deleteLine: () => removeBlock(current),
   copyAll,
+  copySection: () => copySection(),
   copyEq: () => { const w = lastEq(); if (w) copyHtml(eqHtml(w.firstChild.value), mathml(w.firstChild.value)); },
   accept: () => accept(),
   dpUp: () => bumpDp(1),
@@ -340,6 +353,7 @@ const actions = {
   save: download,
   print: () => print(),
   togglePane: () => { $('#pane').hidden = !$('#pane').hidden; },
+  toggleSymbols: () => { $('#sympane').hidden = !$('#sympane').hidden; },
   fileMenu: btn => openMenu(btn, [
     ['note_add', 'New project…', newProject],
     ['edit', 'Rename project…', renameProject],
@@ -355,7 +369,7 @@ const actions = {
 
 document.addEventListener('mousedown', e => {
   // keep the caret in the equation when a ribbon button is pressed (like Word)
-  if (e.target.closest('#ribbon button, #titlebar button, .menu button, #vars td[data-latex]')) e.preventDefault();
+  if (e.target.closest('#ribbon button, #titlebar button, .menu button, #symbols button, #vars td[data-latex]')) e.preventDefault();
 });
 
 document.addEventListener('click', e => {
@@ -376,6 +390,23 @@ $('#page').addEventListener('click', e => {
   else addEq(last);
 });
 
+// right-click menu on any line (replaces MathLive's own menu)
+doc.addEventListener('contextmenu', e => {
+  const b = e.target.closest?.('.eq, .section');
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  current = b;
+  const eq = b.classList.contains('eq') && b.firstChild.value;
+  openMenu(b, [
+    ...(eq ? [['function', 'Copy equation', () => copyHtml(eqHtml(eq), mathml(eq))]] : []),
+    ['content_copy', 'Copy section', () => copySection(b)],
+    ['select_all', 'Copy all', copyAll],
+    ['add', 'New equation below', () => addEq(b)],
+    ['horizontal_rule', 'New section below', () => addSection(b)],
+    ['delete', 'Delete line', () => removeBlock(b)],
+  ], true, { left: e.clientX, bottom: e.clientY });
+}, { capture: true });
+
 $('#vars').addEventListener('change', e => {
   if (e.target.dataset.var) setDp(e.target.dataset.var, e.target.value === '' ? null : Number(e.target.value));
 });
@@ -386,7 +417,7 @@ $('#show-working').addEventListener('change', e => { settings.showWorking = e.ta
 // menus (file menu and structure galleries)
 let menu;
 function closeMenu() { menu?.remove(); menu = null; }
-function openMenu(btn, items, list = false) {
+function openMenu(btn, items, list = false, at = btn.getBoundingClientRect()) {
   closeMenu();
   menu = document.createElement('div');
   menu.className = 'menu' + (list ? ' list' : '');
@@ -397,14 +428,12 @@ function openMenu(btn, items, list = false) {
     menu.append(b);
   }
   document.body.append(menu);
-  const r = btn.getBoundingClientRect();
-  menu.style.left = Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + 'px';
-  menu.style.top = r.bottom + 2 + 'px';
+  menu.style.left = Math.max(8, Math.min(at.left, innerWidth - menu.offsetWidth - 8)) + 'px';
+  menu.style.top = Math.max(8, Math.min(at.bottom + 2, innerHeight - menu.offsetHeight - 8)) + 'px';
 }
 document.addEventListener('click', e => { if (menu && !menu.contains(e.target) && !e.target.closest('[data-act=fileMenu], [data-struct]')) closeMenu(); }, true);
 
-// Equation tab contents. #0 = selection or empty box, #? = empty box (MathLive placeholders)
-const SYMBOLS = ['\\pm', '\\infty', '\\neq', '\\approx', '\\times', '\\div', '\\le', '\\ge', '\\propto', '\\degree', '\\pi', '\\theta', '\\alpha', '\\beta', '\\Delta', '\\mu', '\\lambda', '\\sigma', '\\omega', '\\Omega', '\\rightarrow', '\\Rightarrow', '\\partial', '\\nabla'];
+// Symbols panel. #0 = selection or empty box, #? = empty box (MathLive placeholders)
 const STRUCTURES = {
   Fraction: ['\\frac{x}{y}', ['\\frac{#0}{#?}', '{#0}/{#?}', '\\tfrac{#0}{#?}', '\\frac{dy}{dx}']],
   Script: ['e^x', ['#0^{#?}', '#0_{#?}', '#0_{#?}^{#?}', '{}^{#?}_{#?}#0']],
@@ -417,13 +446,24 @@ const STRUCTURES = {
   'Limit and Log': ['\\lim_{n\\to\\infty}', ['\\log_{#?}\\left(#0\\right)', '\\ln\\left(#0\\right)', '\\log\\left(#0\\right)', '\\lim_{#?\\to#?}#0', '\\lim_{x\\to\\infty}#0', 'e^{#0}', '#0!', '\\binom{#?}{#?}']],
   Matrix: ['\\begin{bmatrix}1&0\\\\0&1\\end{bmatrix}', ['\\begin{pmatrix}#?&#?\\\\#?&#?\\end{pmatrix}', '\\begin{bmatrix}#?&#?\\\\#?&#?\\end{bmatrix}', '\\begin{vmatrix}#?&#?\\\\#?&#?\\end{vmatrix}', '\\begin{pmatrix}#?&#?&#?\\\\#?&#?&#?\\\\#?&#?&#?\\end{pmatrix}']],
 };
-$('#symbols').innerHTML = SYMBOLS.map(s => `<button class="sym" data-ins="${esc(s)}" title="${esc(s)}">${convertLatexToMarkup(s)}</button>`).join('');
-$('#structures').innerHTML = Object.entries(STRUCTURES).map(([name, [icon]]) =>
-  `<button class="big" data-struct="${name}"><span class="mi">${convertLatexToMarkup(icon)}</span>${name.replace(' ', '<br>')}</button>`).join('');
-$('#symbols').addEventListener('click', e => { const b = e.target.closest('[data-ins]'); if (b) insertIntoEq(b.dataset.ins); });
-$('#structures').addEventListener('click', e => {
-  const b = e.target.closest('[data-struct]');
-  if (b) openMenu(b, STRUCTURES[b.dataset.struct][1].map(l => ['', l.replace(/#0|#\?/g, '\\square'), () => insertIntoEq(l)]));
+const SYMBOLS = {
+  'Basic maths': '\\pm \\mp \\times \\div \\cdot \\neq \\approx \\equiv \\le \\ge \\ll \\gg \\propto \\infty \\degree \\% \\sqrt{#0} #0^{2} #0^{3} #0^{-1} \\frac{#0}{#?} \\left|#0\\right| #0! \\pi',
+  'Greek': '\\alpha \\beta \\gamma \\delta \\epsilon \\zeta \\eta \\theta \\iota \\kappa \\lambda \\mu \\nu \\xi \\rho \\sigma \\tau \\upsilon \\phi \\varphi \\chi \\psi \\omega \\varepsilon',
+  'Capital Greek': '\\Gamma \\Delta \\Theta \\Lambda \\Xi \\Pi \\Sigma \\Upsilon \\Phi \\Psi \\Omega',
+  'Calculus': '\\frac{d}{dx} \\frac{d#0}{d#?} \\frac{\\partial}{\\partial#?} \\partial \\nabla \\int \\iint \\oint \\sum \\prod \\lim_{#?\\to#?} \\Delta',
+  'Arrows': '\\rightarrow \\leftarrow \\leftrightarrow \\Rightarrow \\Leftarrow \\Leftrightarrow \\uparrow \\downarrow \\mapsto \\to',
+  'Sets and logic': '\\in \\notin \\subset \\subseteq \\cup \\cap \\emptyset \\forall \\exists \\neg \\land \\lor \\mathbb{R} \\mathbb{N} \\mathbb{Z} \\mathbb{Q} \\mathbb{C} \\therefore \\because',
+  'Geometry': '\\angle \\triangle \\perp \\parallel \\sim \\cong \\overline{#0} \\vec{#0} \\hat{#0} \\circ',
+};
+const preview = l => convertLatexToMarkup(l.replace(/#0|#\?/g, '\\square'));
+$('#symbols').innerHTML = '<h3>Structures</h3><div class="grid wide">' +
+  Object.entries(STRUCTURES).map(([name, [icon]]) => `<button data-struct="${name}" title="${name}"><span class="mi">${convertLatexToMarkup(icon)}</span>${name}</button>`).join('') + '</div>' +
+  Object.entries(SYMBOLS).map(([group, list]) => `<h3>${group}</h3><div class="grid">` +
+    list.split(' ').map(s => `<button data-ins="${esc(s)}" title="${esc(s.replace(/#0|#\?/g, '□'))}">${preview(s)}</button>`).join('') + '</div>').join('');
+$('#symbols').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b?.dataset.ins) insertIntoEq(b.dataset.ins);
+  if (b?.dataset.struct) openMenu(b, STRUCTURES[b.dataset.struct][1].map(l => ['', l.replace(/#0|#\?/g, '\\square'), () => insertIntoEq(l)]));
 });
 
 document.addEventListener('keydown', e => {
@@ -432,4 +472,5 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeMenu();
 });
 
+if (innerWidth < 860) $('#sympane').hidden = $('#pane').hidden = true; // phones: open from View
 openProject(project);

@@ -76,8 +76,17 @@
 
   /* variables pane */
   #pane { width: 280px; background: #fff; border-left: 1px solid var(--line); display: flex; flex-direction: column; flex: none; }
-  #pane[hidden] { display: none; }
-  #pane header { display: flex; align-items: center; padding: 10px 12px; font-size: 15px; font-weight: 600; }
+  #pane[hidden], #sympane[hidden] { display: none; }
+  #sympane { width: 248px; background: #fff; border-right: 1px solid var(--line); display: flex; flex-direction: column; flex: none; }
+  #symbols { overflow: auto; padding: 0 8px 16px; }
+  #symbols h3 { font-size: 11px; font-weight: 600; color: var(--muted); margin: 10px 4px 4px; text-transform: uppercase; letter-spacing: .03em; }
+  #symbols .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; }
+  #symbols .grid.wide { grid-template-columns: repeat(3, 1fr); }
+  #symbols .grid button { justify-content: center; min-height: 32px; font-size: 15px; padding: 2px; }
+  #symbols .grid.wide button { flex-direction: column; font-size: 11px; color: var(--muted); min-height: 54px; }
+  #symbols .grid.wide .mi { font-size: 15px; color: var(--text); height: 30px; display: flex; align-items: center; }
+  #symbols .ML__latex { pointer-events: none; }
+  #pane header, #sympane header { display: flex; align-items: center; padding: 10px 12px; font-size: 15px; font-weight: 600; }
   #pane header span { flex: 1; }
   .hint { color: var(--muted); padding: 0 12px 8px; font-size: 12px; }
   #vars { overflow: auto; padding: 0 8px; }
@@ -92,9 +101,9 @@
   #status { background: var(--ribbon); border-top: 1px solid var(--line); display: flex; align-items: center; gap: 16px; padding: 4px 12px; font-size: 12px; color: var(--muted); flex: none; }
   #status .spacer { flex: 1; }
 
-  @media (max-width: 860px) { #page { padding: 24px 16px; min-height: 70vh; } #pane { position: fixed; right: 0; top: 0; bottom: 0; z-index: 5; } }
+  @media (max-width: 860px) { #page { padding: 24px 16px; min-height: 70vh; } #pane, #sympane { position: fixed; top: 0; bottom: 0; z-index: 5; } #pane { right: 0; } #sympane { left: 0; } }
   @media print {
-    #titlebar, #tabs, #ribbon, #pane, #status, .ghost { display: none !important; }
+    #titlebar, #tabs, #ribbon, #pane, #sympane, #status, .ghost { display: none !important; }
     body, #scroller { background: #fff; overflow: visible; padding: 0; display: block; }
     #page { box-shadow: none; padding: 0; width: auto; min-height: 0; }
     .section h2:empty { display: none; }
@@ -111,14 +120,14 @@
 <div id="tabs" role="tablist">
   <button class="file" data-act="fileMenu">File</button>
   <button data-tab="home" class="on">Home</button>
-  <button data-tab="equation">Equation</button>
   <button data-tab="view">View</button>
 </div>
 
 <div id="ribbon">
   <div class="panel on" id="tab-home">
     <div class="group"><div class="body">
-      <button class="big" data-act="copyAll" title="Copy every section and equation, ready to paste into Word"><span class="icon">content_copy</span>Copy all<br>for Word</button>
+      <button class="big" data-act="copySection" title="Copy this section (heading and its equations) for Word. Also: Ctrl+C on a heading, or right-click a line"><span class="icon">content_copy</span>Copy<br>section</button>
+      <button class="big" data-act="copyAll" title="Copy every section and equation, ready to paste into Word"><span class="icon">select_all</span>Copy<br>all</button>
       <button class="big" data-act="copyEq" title="Copy this equation (Ctrl+C)"><span class="icon">function</span>Copy<br>equation</button>
     </div><div class="label">Clipboard</div></div>
     <div class="group"><div class="body">
@@ -137,13 +146,10 @@
     </div></div><div class="label">Calculation</div></div>
   </div>
 
-  <div class="panel" id="tab-equation">
-    <div class="group"><div class="body" id="symbols"></div><div class="label">Symbols</div></div>
-    <div class="group"><div class="body" id="structures" style="max-width:none;flex-wrap:nowrap"></div><div class="label">Structures</div></div>
-  </div>
 
   <div class="panel" id="tab-view">
     <div class="group"><div class="body">
+      <button class="big" data-act="toggleSymbols" title="Show or hide the Symbols panel"><span class="icon">calculate</span>Symbols</button>
       <button class="big" data-act="togglePane" title="Show or hide the Variables pane"><span class="icon">view_sidebar</span>Variables</button>
       <button class="big" data-act="print" title="Print (Ctrl+P)"><span class="icon">print</span>Print</button>
     </div><div class="label">Show</div></div>
@@ -151,6 +157,11 @@
 </div>
 
 <div id="main">
+  <aside id="sympane">
+    <header><span>Symbols</span><button data-act="toggleSymbols" title="Close"><span class="icon">close</span></button></header>
+    <div class="hint">Click to put it in the equation you're typing.</div>
+    <div id="symbols"></div>
+  </aside>
   <div id="scroller"><div id="page"><div id="doc"></div></div></div>
   <aside id="pane">
     <header><span>Variables</span><button data-act="togglePane" title="Close"><span class="icon">close</span></button></header>
@@ -163,7 +174,7 @@
   <span id="eq-count">0 equations</span>
   <span id="var-count">0 variables</span>
   <span class="spacer"></span>
-  <span>Enter: next equation · Ctrl+Enter: new section · Tab: fill suggestion</span>
+  <span>Enter: next equation · Ctrl+Enter: new section · Tab: fill suggestion · Right-click: copy section</span>
 </div>
 
 <input type="file" id="open-file" accept=".mathnotes" hidden>
