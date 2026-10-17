@@ -1,6 +1,6 @@
 import { MathfieldElement, convertLatexToMarkup, convertLatexToMathMl } from 'https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.mjs';
 import { ComputeEngine } from 'https://cdn.jsdelivr.net/npm/@cortex-js/compute-engine@0.58.0/dist/compute-engine.min.esm.js';
-import { evaluateDocument, formatNumber } from './calc.js';
+import { evaluateDocument, formatNumber, parseVarLine } from './calc.js';
 
 const ce = new ComputeEngine();
 const $ = s => document.querySelector(s);
@@ -9,7 +9,19 @@ const PROJECTS = 'mathnotes-projects', CURRENT = 'mathnotes-current', SETTINGS =
 
 const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
-const settings = { showWorking: true, ...load(SETTINGS, {}) };
+// Universal constants are known in every project from the first line; a project can switch one off,
+// and any line like g=10 overrides it from there down.
+const UNIVERSALS = `g = 9.81 m/s^2
+G = 6.674e-11 N m^2/kg^2
+c = 2.998e8 m/s
+k_B = 1.380649e-23 J/K
+N_A = 6.02214076e23 1/mol
+epsilon_0 = 8.854e-12 F/m
+mu_0 = 1.2566e-6 H/m
+m_e = 9.109e-31 kg
+m_p = 1.673e-27 kg
+q_e = 1.602e-19 C`;
+const settings = { showWorking: true, universals: UNIVERSALS, ...load(SETTINGS, {}) };
 
 // Projects: separate named documents, each with its own equations and decimal places.
 const projects = load(PROJECTS, null) ?? {
@@ -76,9 +88,11 @@ function makeEq(latex = '', base) {
   }, { capture: true });
   mf.addEventListener('paste', e => {
     const html = e.clipboardData.getData('text/html');
-    if (!html.includes('data-latex')) return; // ordinary paste: let MathLive handle it
+    const vars = parseVarList(e.clipboardData.getData('text/plain'));
+    if (html.includes('data-latex')) pasteBlocks(fromHtml(html), w);
+    else if (vars) pasteBlocks(vars, w); // a list of variables becomes one line each
+    else return; // ordinary paste: let MathLive handle it
     e.preventDefault(); e.stopPropagation();
-    pasteBlocks(html, w);
   }, { capture: true });
   return w;
 }
@@ -163,7 +177,7 @@ function schedule() { clearTimeout(timer); timer = setTimeout(recompute, 200); }
 function recompute() {
   // ponytail: re-evaluates the whole document each time; cache per equation if documents get huge
   const eqs = [...doc.querySelectorAll('.eq')];
-  result = evaluateDocument(ce, eqs.map(w => ({ id: w.dataset.id, latex: w.dataset.base ?? w.firstChild.value })), dpOf(), settings.showWorking);
+  result = evaluateDocument(ce, eqs.map(w => ({ id: w.dataset.id, latex: w.dataset.base ?? w.firstChild.value })), dpOf(), settings.showWorking, universals());
   for (const w of eqs) {
     let g = result.ghosts[w.dataset.id] || '';
     if (w.dataset.base != null) {
@@ -189,22 +203,43 @@ function recompute() {
 }
 
 function saveProject() {
-  projects[project] = { blocks: serialize(), dp: dpOf() };
+  projects[project] = { blocks: serialize(), dp: dpOf(), off: offList() };
   store(PROJECTS, projects);
   store(CURRENT, project);
 }
 
+// several "name = value" lines (or name<tab>value rows from Excel) -> equation blocks, else null
+function parseVarList(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2 && !/\t/.test(text)) return null;
+  const parsed = lines.map(parseVarLine);
+  return parsed.every(Boolean) ? parsed.map(p => ({ eq: p.latex })) : null;
+}
+
+const universalList = () => settings.universals.split('\n').map(parseVarLine).filter(u => u?.key && u.number != null);
+const offList = () => (projects[project].off ??= []);
+const universals = () => universalList().filter(u => !offList().includes(u.key)).map(u => ({ key: u.key, latex: u.nameLatex, value: u.number }));
+
 function renderVars() {
-  const rows = [...result.vars].map(([name, v]) => {
+  const rows = [...result.vars].filter(([, v]) => v.id !== 'universal').map(([name, v]) => {
     const dp = dpOf()[name];
     const opts = ['<option value="">Auto</option>', ...Array.from({ length: 11 }, (_, i) => `<option${dp === i ? ' selected' : ''}>${i}</option>`)].join('');
     return `<tr><td data-latex="${esc(v.latex)}" title="Insert into equation">${convertLatexToMarkup(v.latex)}</td>
       <td>${convertLatexToMarkup(formatNumber(v.value, dp))}</td>
       <td><select data-var="${esc(name)}" title="Decimal places">${opts}</select></td></tr>`;
   }).join('');
-  $('#vars').innerHTML = rows
+  const uni = universalList().map(u => {
+    const off = offList().includes(u.key);
+    return `<tr class="${off ? 'off' : ''}"><td data-latex="${esc(u.nameLatex)}" title="Insert into equation">${convertLatexToMarkup(u.nameLatex)}</td>
+      <td>${convertLatexToMarkup(formatNumber(u.number, null))}</td>
+      <td><button data-uni="${esc(u.key)}" title="${off ? 'Use again in this project' : 'Stop using in this project'}"><span class="icon">${off ? 'undo' : 'close'}</span></button></td></tr>`;
+  }).join('');
+  $('#vars').innerHTML = (rows
     ? `<table><tr><th>Name</th><th>Value</th><th>Decimals</th></tr>${rows}</table>`
-    : '<p class="hint">No variables yet. Type something like x=5.</p>';
+    : '<p class="hint">No variables yet. Type something like x=5, or use Paste variables.</p>') +
+    `<h4>Universal <button data-act="editUniversals" title="Edit the universal constants (all projects)"><span class="icon">edit</span>Edit</button></h4>
+    <p class="hint">Known in every project. ✕ stops using one in this project; writing e.g. g=10 overrides it from that line down.</p>
+    <table>${uni}</table>`;
 }
 
 function setDp(name, dp) {
@@ -330,13 +365,42 @@ function copyBlocks(els) {
     list.map(b => b.section != null ? `\n${b.section}\n` : b.eq).join('\n'));
 }
 
-function pasteBlocks(html, ref) {
-  const list = fromHtml(html);
+function pasteBlocks(list, ref) {
   let at = ref;
   for (const b of list) at = after(at, b.section != null ? makeSection(b.section) : makeEq(b.eq, b.base));
   if (ref?.classList.contains('eq') && !ref.firstChild.value) ref.remove();
   focusBlock(at, true);
   schedule();
+}
+
+// text box dialog; resolves to the text, or null if cancelled
+function ask(title, hint, text = '') {
+  const d = $('#dlg');
+  $('#dlg-title').textContent = title;
+  $('#dlg-hint').textContent = hint;
+  $('#dlg-text').value = text;
+  d.returnValue = '';
+  d.showModal();
+  $('#dlg-text').focus();
+  return new Promise(res => d.addEventListener('close', () => res(d.returnValue === 'ok' ? $('#dlg-text').value : null), { once: true }));
+}
+
+async function pasteVariables(ref = current) {
+  const text = await ask('Paste variables', 'One per line, e.g. "m = 5 kg" or "v0: 3.2". Rows copied from Excel or a Word table work too. Each becomes an equation line you can use below it.');
+  if (!text?.trim()) return;
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const parsed = lines.map(parseVarLine);
+  const bad = lines.filter((_, i) => !parsed[i]);
+  if (bad.length) alert(`These lines weren't understood and were skipped:\n${bad.join('\n')}\n\nUse single-letter names (with an optional subscript like v_0 or Greek like theta).`);
+  if (parsed.some(Boolean)) pasteBlocks(parsed.filter(Boolean).map(p => ({ eq: p.latex })), ref?.isConnected ? ref : doc.lastElementChild);
+}
+
+async function editUniversals() {
+  const text = await ask('Universal constants', 'Used in every project. One per line: name = number unit. Delete a line to remove it everywhere.', settings.universals);
+  if (text == null) return;
+  settings.universals = text.trim();
+  store(SETTINGS, settings);
+  recompute();
 }
 
 // ---------- ribbon ----------
@@ -345,6 +409,8 @@ const actions = {
   newSection: () => addSection(),
   deleteLine: () => removeBlock(current),
   copyAll,
+  pasteVariables: () => pasteVariables(),
+  editUniversals,
   copySection: () => copySection(),
   copyEq: () => { const w = lastEq(); if (w) copyHtml(eqHtml(w.firstChild.value), mathml(w.firstChild.value)); },
   accept: () => accept(),
@@ -403,9 +469,18 @@ doc.addEventListener('contextmenu', e => {
     ['select_all', 'Copy all', copyAll],
     ['add', 'New equation below', () => addEq(b)],
     ['horizontal_rule', 'New section below', () => addSection(b)],
+    ['playlist_add', 'Paste variables here…', () => pasteVariables(b)],
     ['delete', 'Delete line', () => removeBlock(b)],
   ], true, { left: e.clientX, bottom: e.clientY });
 }, { capture: true });
+
+$('#vars').addEventListener('click', e => {
+  const k = e.target.closest('[data-uni]')?.dataset.uni;
+  if (!k) return;
+  const off = offList(), i = off.indexOf(k);
+  if (i < 0) off.push(k); else off.splice(i, 1);
+  recompute();
+});
 
 $('#vars').addEventListener('change', e => {
   if (e.target.dataset.var) setDp(e.target.dataset.var, e.target.value === '' ? null : Number(e.target.value));

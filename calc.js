@@ -154,10 +154,42 @@ export function findRoot(f) {
   return parseFloat(r.toPrecision(12)); // trim bisection noise
 }
 
-// Walk the equations in document order. eqs: [{id, latex}]; dp: {name: places}.
+// drop \text{...} groups (units like "5\text{ kg}") so they don't affect calculations
+function stripText(t) {
+  const out = [];
+  for (let i = 0; i < t.length;) {
+    if (t[i] === '\\text') { i = groupEnd(t, i + 1); continue; }
+    out.push(t[i++]);
+  }
+  return out;
+}
+
+const GREEK_WORD = new RegExp(`^(${[...GREEK].map(g => g.slice(1)).join('|')}|pi)$`);
+// "m = 5 kg", "v0: 3.2", "theta\t30" (pasted from Word/Excel) -> { latex, key, number }
+export function parseVarLine(line) {
+  const m = line.trim().match(/^([A-Za-z\\][\w\\{}]*)\s*(?:=|:|\t)\s*(.+)$/);
+  if (!m) return null;
+  let [, name, value] = m;
+  const n = name.replace(/[{}\\]/g, '').match(/^([A-Za-z]+?)(?:_?(\d+|_[A-Za-z0-9]+))?$/);
+  if (!n) return null;
+  const base = GREEK_WORD.test(n[1]) ? '\\' + n[1] : n[1];
+  if (base.length > 1 && base[0] !== '\\') return null; // multi-letter names would read as products
+  const sub = n[2]?.replace(/^_/, '');
+  const nameLatex = sub ? `${base}_{${sub}}` : base;
+  const num = value.trim().match(/^(-?\d*\.?\d+)(?:[eE]([-+]?\d+))?\s*(.*)$/);
+  let valueLatex = value.trim(), number = null;
+  if (num) {
+    number = Number(num[1] + (num[2] ? 'e' + num[2] : ''));
+    valueLatex = (num[2] ? `${num[1]}\\times10^{${parseInt(num[2])}}` : num[1]) + (num[3] ? `\\text{ ${num[3].replace(/[{}\\]/g, '')}}` : '');
+  }
+  return { latex: `${nameLatex}=${valueLatex}`, nameLatex, key: scan(tokenize(nameLatex)).occ[0]?.name, number };
+}
+
+// Walk the equations in document order. eqs: [{id, latex}]; dp: {name: places};
+// initial: [{key, latex, value}] variables known before the first line (universal constants).
 // Returns { vars: Map name -> {value, latex, id}, ghosts: {id: latex to append} }
-export function evaluateDocument(ce, eqs, dp, showWorking) {
-  const vars = new Map(), ghosts = {};
+export function evaluateDocument(ce, eqs, dp, showWorking, initial = []) {
+  const vars = new Map(initial.map(u => [u.key, { value: u.value, latex: u.latex, id: 'universal' }])), ghosts = {};
   const vals = () => Object.fromEntries([...vars].map(([k, v]) => [k, formatNumber(v.value, dp[k])]));
   const set = (name, latex, value, id) => {
     if (dp[name] != null) value = Number(value.toFixed(dp[name]));
@@ -171,7 +203,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking) {
 
   for (const { id, latex } of eqs) {
     let ghost = '';
-    for (const st of splitTop(tokenize(latex), SPLIT_STATEMENT)) {
+    for (const st of splitTop(stripText(tokenize(latex)), SPLIT_STATEMENT)) {
       ghost = '';
       const parts = splitTop(st, SPLIT_PART);
       if (parts.length < 2) continue;

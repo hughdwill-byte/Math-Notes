@@ -96,6 +96,18 @@
   #vars td:first-child { cursor: pointer; }
   #vars td:first-child:hover { background: var(--hover); }
   #vars select { font: inherit; height: 24px; }
+  #vars h4 { display: flex; align-items: center; justify-content: space-between; margin: 18px 4px 2px; font-size: 13px; }
+  #vars h4 button { font-weight: 400; color: var(--brand); }
+  #vars .hint { padding: 0 4px 6px; }
+  #vars tr.off td { opacity: .45; text-decoration: line-through; }
+  #vars tr.off td:last-child { opacity: 1; text-decoration: none; }
+  dialog { border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 12px 32px rgba(0,0,0,.25); padding: 20px; width: min(480px, calc(100vw - 32px)); }
+  dialog h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+  dialog .hint { padding: 0 0 10px; }
+  dialog textarea { width: 100%; font: 13px Consolas, "Courier New", monospace; padding: 8px; border: 1px solid var(--line); border-radius: 3px; resize: vertical; }
+  dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  dialog .actions button { padding: 6px 16px; border: 1px solid var(--line); }
+  dialog .actions .primary { background: var(--brand); color: #fff; border-color: var(--brand); }
 
   /* status bar */
   #status { background: var(--ribbon); border-top: 1px solid var(--line); display: flex; align-items: center; gap: 16px; padding: 4px 12px; font-size: 12px; color: var(--muted); flex: none; }
@@ -133,6 +145,7 @@
     <div class="group"><div class="body">
       <button class="big" data-act="newEq" title="New equation below (Enter)"><span class="icon">add</span>New<br>equation</button>
       <button class="big" data-act="newSection" title="New section: a line with a heading (Ctrl+Enter)"><span class="icon">horizontal_rule</span>New<br>section</button>
+ <button class="big" data-act="pasteVariables" title="Paste a list of variables (e.g. m = 5 kg, one per line)"><span class="icon">playlist_add</span>Paste<br>variables</button>
       <button class="big" data-act="deleteLine" title="Delete this equation or section"><span class="icon">delete</span>Delete<br>line</button>
     </div><div class="label">Insert</div></div>
     <div class="group"><div class="body"><div class="rows">
@@ -177,6 +190,11 @@
   <span>Enter: next equation · Ctrl+Enter: new section · Tab: fill suggestion · Right-click: copy section</span>
 </div>
 
+ <dialog id="dlg"><form method="dialog">
+  <h3 id="dlg-title"></h3><p class="hint" id="dlg-hint"></p>
+  <textarea id="dlg-text" rows="10" spellcheck="false"></textarea>
+  <div class="actions"><button value="cancel">Cancel</button><button value="ok" class="primary">OK</button></div>
+</form></dialog>
 <input type="file" id="open-file" accept=".mathnotes" hidden>
 <script type="module" src="app.js"></script>
 </body>

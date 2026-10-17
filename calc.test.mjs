@@ -1,7 +1,7 @@
 // Engine check: npm i @cortex-js/compute-engine@0.58.0 && node calc.test.mjs
 import assert from 'node:assert';
 import { ComputeEngine } from '@cortex-js/compute-engine';
-import { evaluateDocument } from './calc.js';
+import { evaluateDocument, parseVarLine } from './calc.js';
 const ce = new ComputeEngine();
 const run = (ls, dp = {}, w = true) => evaluateDocument(ce, ls.map((latex, i) => ({ id: i, latex })), dp, w);
 let r = run(['y=10', 'z=2', 'x=\\frac{y}{z}']);
@@ -20,4 +20,18 @@ r = run(['x^{2}=16']); assert.equal(r.vars.get('x').value, 4);
 r = run(['2^{w}=1024']); assert.ok(Math.abs(r.vars.get('w').value - 10) < 1e-9);
 r = run(['E=mc^{2}']); assert.equal(r.vars.size, 0);
 r = run(['g=9.81','h=20','\\sqrt{2gh}=v']); assert.ok(Math.abs(r.vars.get('v').value-19.809)<1e-3);
+// pasted variable lines
+assert.deepEqual(parseVarLine('m = 5 kg'), { latex: 'm=5\\text{ kg}', nameLatex: 'm', key: 'm', number: 5 });
+assert.equal(parseVarLine('v0: 3.2').latex, 'v_{0}=3.2');
+assert.equal(parseVarLine('theta\t30').latex, '\\theta=30');
+assert.equal(parseVarLine('k_B = 1.380649e-23').latex, 'k_{B}=1.380649\\times10^{-23}');
+assert.equal(parseVarLine('epsilon_0 = 8.85e-12').key, 'epsilon_0');
+assert.equal(parseVarLine('mass = 5'), null);
+assert.equal(parseVarLine('just text'), null);
+// units are ignored in maths; universal constants are known from the start and can be overridden
+r = run(['m=5\\text{ kg}', 'F=mg']);
+assert.equal(r.vars.get('F'), undefined);
+r = evaluateDocument(ce, [{ id: 0, latex: 'm=5\\text{ kg}' }, { id: 1, latex: 'F=mg' }, { id: 2, latex: 'g=10' }, { id: 3, latex: 'W=mg' }], {}, true, [{ key: 'g', latex: 'g', value: 9.81 }]);
+assert.ok(Math.abs(r.vars.get('F').value - 49.05) < 1e-9); assert.equal(r.ghosts[1], '=5\\cdot 9.81=49.05');
+assert.equal(r.vars.get('W').value, 50);
 console.log('ok');

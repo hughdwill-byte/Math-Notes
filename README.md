@@ -8,6 +8,8 @@ An equations-only notebook in a Word-style window, hosted on GitHub Pages.
 - Variables are remembered top to bottom. Type `x=y/z` and a grey `= 10/2 = 5` appears; **Tab** fills it in. Filled-in numbers stay live: changing decimal places or an earlier value updates them on the page.
 - Untick **Show working step** to go straight to the answer (`= 5`).
 - An equation with exactly one unknown (e.g. `10=2b+x`) is solved for it.
+- **Paste variables** (Home, or right-click a line): paste a list like `m = 5 kg` / `v0: 3.2` / rows from Excel, one per line; each becomes an equation line usable below it. Pasting such a list straight into an equation (Ctrl+V) does the same. Units are kept on the page but ignored in the maths.
+- **Universal constants** (g, G, c, k_B, N_A, ε₀, μ₀, mₑ, mₚ, qₑ) are known in every project, so `F=mg` fills in straight away. Writing `g=10` overrides it from that line down; ✕ in the Variables pane stops using one in this project; Edit changes the list for all projects.
 - Decimal places per variable: the Variables pane dropdowns or the Increase/Decrease Decimal buttons.
 - **Symbols panel** (left of the page): structures (fractions, roots, integrals, matrices…), Greek letters, calculus, arrows, sets and geometry symbols. Click to insert. View → Symbols shows/hides it.
 - Copying for Word: **right-click any line → Copy section**, or click a section heading and press **Ctrl+C**, to copy that heading and its equations. Ctrl+C in an equation copies that equation; Home → Copy all copies everything. Equations paste into Word as real Word equations.
