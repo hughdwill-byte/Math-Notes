@@ -42,6 +42,11 @@ let seq = 0, current = null, result = { vars: new Map(), ghosts: {} };
 const blocks = () => [...doc.children];
 const lastEq = () => (current?.isConnected && current.classList.contains('eq') ? current : null);
 
+// MathLive turns some typed letter pairs into symbols; drop the ones that clash with names and words
+// (C_Wing would become C_W∈g, c_Root c_R∞t, V_max V_\max, ...). Greek letters and functions stay.
+const NO_SHORTCUT = 'in xin sint ii jj ee oo AA EE NN ZZ QQ RR CC TT xx vv vvv nn nnn uu uuu mm cm km kg ft mi inch lt gt sub sup sube supe and or not of th sh ch tg lb lg Re Im mod max min mean median det arg del sec dx dy dt'.split(' ');
+let shortcuts;
+
 // An equation filled in with Tab keeps what you typed in data-base; the filled part after it is
 // recalculated every time, so changing decimal places or an earlier value updates the page.
 function makeEq(latex = '', base) {
@@ -50,6 +55,9 @@ function makeEq(latex = '', base) {
   w.dataset.id = ++seq;
   if (base != null) w.dataset.base = base;
   const mf = new MathfieldElement();
+  mf.addEventListener('mount', () => {
+    mf.inlineShortcuts = shortcuts ??= Object.fromEntries(Object.entries(mf.inlineShortcuts).filter(([k]) => !NO_SHORTCUT.includes(k)));
+  });
   mf.placeholder = '\\text{Type equation here.}';
   mf.value = latex;
   const ghost = document.createElement('span');

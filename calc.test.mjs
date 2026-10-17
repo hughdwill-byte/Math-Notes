@@ -30,11 +30,20 @@ assert.equal(parseVarLine('mass = 5'), null);
 assert.equal(parseVarLine('just text'), null);
 // tables: header row, any column order, extra description column, units column
 const eqs = t => parseVariables(t).vars.map(v => v.latex);
-assert.deepEqual(eqs('Symbol\tValue\tUnits\nm\t1,200\tkg\nv0\t25\tm/s\nρ\t1.225\tkg/m^3'), ['m=1200\\text{ kg}', 'v_{0}=25\\text{ m/s}', '\\rho=1.225\\text{ kg/m^3}']);
+assert.deepEqual(eqs('Symbol\tValue\tUnits\nm\t1,200\tkg\nv0\t25\tm/s\nρ\t1.225\tkg/m^3'), ['m=1200\\text{ kg}', 'v_{0}=25\\text{ m/s}', '\\rho=1.225\\text{ kg/m³}']);
 assert.deepEqual(eqs('Description\tValue\tUnit\tSymbol\nMass of car\t1200\tkg\tm\nLift coefficient\t0.45\t-\tCL'), ['m=1200\\text{ kg}', 'C_{L}=0.45']);
 assert.deepEqual(eqs('g\t9.81\tm/s²\nS\t16.2\t(m²)\nE\t2.1×10⁻³\tPa'), ['g=9.81\\text{ m/s²}', 'S=16.2\\text{ m²}', 'E=2.1\\times10^{-3}\\text{ Pa}']);
 assert.deepEqual(eqs('| Name | Value | Units |\n|---|---|---|\n| h_0 | 0.25 | |\n| alpha | 5 | deg |'), ['h_{0}=0.25', '\\alpha=5\\text{ deg}']);
 assert.deepEqual(eqs('m = 5 kg\nv0: 3\ntheta\t30'), ['m=5\\text{ kg}', 'v_{0}=3', '\\theta=30']); // mixed list
+// Word table with equation cells (copied as Word's linear format)
+const word = 'QUANTITY\tVALUE\tUNITS\nC_(l_(α_Wing ) )\t0.108\t1/deg\nc_Root\t125\tmm\nAR_wing\t4.544\t\n(∂ε)/(∂α)\t0.606\t/rad\nη\t0.9\t\nS_wing\t0.05425\tm^2\nI_yy\t0.047\tkg⋅m^2';
+assert.deepEqual(eqs(word), ['C_{l_{\\alpha_{Wing}}}=0.108\\text{ 1/deg}', 'c_{Root}=125\\text{ mm}', '\\mathrm{AR}_{wing}=4.544',
+  '\\frac{\\partial \\varepsilon}{\\partial \\alpha}=0.606\\text{ /rad}', '\\eta=0.9', 'S_{wing}=0.05425\\text{ m²}', 'I_{yy}=0.047\\text{ kg·m²}']);
+assert.deepEqual(parseVariables(word).skipped, []);
+// pasted names match what you type in an equation
+r = run(['\\mathrm{AR}_{wing}=4.5', 'C_{l_{\\alpha_{Wing}}}=0.1', '\\frac{\\partial\\varepsilon}{\\partial\\alpha}=0.6',
+  'k=\\mathrm{AR}_{wing}\\cdot C_{l_{\\alpha_{Wing}}}\\left(1-\\frac{\\partial\\varepsilon}{\\partial\\alpha}\\right)']);
+assert.ok(Math.abs(r.vars.get('k').value - 0.18) < 1e-9);
 assert.deepEqual(parseVariables('Symbol\tValue\nm\t5\nTotal\tTBC').skipped, ['Total  TBC']);
 // units are ignored in maths; universal constants are known from the start and can be overridden
 r = run(['m=5\\text{ kg}', 'F=mg']);

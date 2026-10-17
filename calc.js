@@ -48,31 +48,54 @@ function splitTop(t, seps) {
   return out;
 }
 
+// A variable starting at t[i]: a letter, a Greek letter or a multi-letter \mathrm{AR}, with an optional
+// subscript (which may itself have subscripts). Returns { end, name, latex } or null.
+function symbolAt(t, i) {
+  const tk = t[i];
+  let end, name;
+  if (/^[a-zA-Z]$/.test(tk)) [end, name] = [i + 1, tk];
+  else if (GREEK.has(tk)) [end, name] = [i + 1, tk.slice(1).replace(/^var/, '')];
+  else if ((tk === '\\mathrm' || tk === '\\operatorname') && t[i + 1] === '{') {
+    const ge = groupEnd(t, i + 1), inner = join(t.slice(i + 2, ge - 1));
+    if (!/^[A-Za-z]{2,}$/.test(inner)) return null;
+    [end, name] = [ge, inner];
+  } else return null;
+  let latex = join(t.slice(i, end));
+  if (t[end] === '_') {
+    const ge = groupEnd(t, end + 1), sub = t.slice(end + 1, ge);
+    const inner = join(sub[0] === '{' ? sub.slice(1, -1) : sub);
+    name += '_' + inner.replace(/\\var(epsilon|theta|phi)/g, '$1').replace(/\\/g, '');
+    latex += '_{' + inner + '}';
+    end = ge;
+  }
+  return { end, name, latex };
+}
+
 // Finds variable occurrences in a token list. Returns { occ: [{start,end,name,latex}], bound: Set }
 export function scan(t) {
   const occ = [], bound = new Set();
   const hasInt = t.some(tk => /^\\(int|iint|oint)$/.test(tk));
   for (let i = 0; i < t.length;) {
     const tk = t[i];
-    if (OPAQUE.has(tk)) { i = groupEnd(t, i + 1); continue; }
     if ((tk === '\\sum' || tk === '\\prod') && t[i + 1] === '_') {
       const m = join(t.slice(i + 2, groupEnd(t, i + 2))).match(/^\{?([a-zA-Z])=/);
       if (m) bound.add(m[1]);
     }
     // differential "dx" inside an integral
     if (hasInt && tk === 'd' && /^[a-zA-Z]$/.test(t[i + 1] || '')) { bound.add(t[i + 1]); i += 2; continue; }
-    if (/^[a-zA-Z]$/.test(tk) || GREEK.has(tk)) {
-      let end = i + 1, name = tk.replace('\\', ''), latex = tk;
-      if (t[end] === '_') {
-        const ge = groupEnd(t, end + 1), sub = t.slice(end + 1, ge);
-        const inner = sub[0] === '{' ? sub.slice(1, -1) : sub;
-        name += '_' + join(inner).replace(/\\/g, '');
-        latex += '_{' + join(inner) + '}';
-        end = ge;
+    // a derivative written as a quantity, e.g. \frac{\partial\varepsilon}{\partial\alpha}
+    if (tk === '\\frac' && t[i + 1] === '{') {
+      const e1 = groupEnd(t, i + 1), e2 = t[e1] === '{' ? groupEnd(t, e1) : -1;
+      const part = g => (g[0] === 'd' || g[0] === '\\partial') && symbolAt(g, 1)?.end === g.length ? g[0] + symbolAt(g, 1).name : null;
+      const a = e2 > 0 && part(t.slice(i + 2, e1 - 1)), b = a && part(t.slice(e1 + 1, e2 - 1));
+      if (b && a[0] === b[0]) {
+        occ.push({ start: i, end: e2, name: `${a}/${b}`.replace(/\\/g, ''), latex: join(t.slice(i, e2)) });
+        i = e2; continue;
       }
-      occ.push({ start: i, end, name, latex });
-      i = end; continue;
     }
+    if (OPAQUE.has(tk) && !symbolAt(t, i)) { i = groupEnd(t, i + 1); continue; }
+    const sym = symbolAt(t, i);
+    if (sym) { occ.push({ start: i, ...sym }); i = sym.end; continue; }
     i++;
   }
   return { occ: occ.filter(o => !bound.has(o.name)), bound };
@@ -170,24 +193,47 @@ const UNICODE_GREEK = { α: 'alpha', β: 'beta', γ: 'gamma', δ: 'delta', ε: '
   Γ: 'Gamma', Δ: 'Delta', Θ: 'Theta', Λ: 'Lambda', Ξ: 'Xi', Π: 'Pi', Σ: 'Sigma', Φ: 'Phi', Ψ: 'Psi', Ω: 'Omega' };
 const SUB_DIGITS = '₀₁₂₃₄₅₆₇₈₉', SUP = { '⁰': 0, '¹': 1, '²': 2, '³': 3, '⁴': 4, '⁵': 5, '⁶': 6, '⁷': 7, '⁸': 8, '⁹': 9, '⁻': '-', '⁺': '+' };
 
-// "v0", "C_L", "CL", "ρ", "theta", "\alpha_1" -> { nameLatex, key }, or null if it doesn't look like a symbol
-export function varName(cell) {
-  let s = cell.trim().replace(/^\$|\$$/g, '').replace(/\s+/g, '')
-    .replace(/[α-ωΓ-Ω]/g, c => UNICODE_GREEK[c] ? UNICODE_GREEK[c] + '_' : c)
-    .replace(/[₀-₉]+/g, d => '_' + [...d].map(c => SUB_DIGITS.indexOf(c)).join(''))
-    .replace(/[{}\\]/g, '').replace(/_+/g, '_').replace(/_$/, '');
-  const n = s.match(/^([A-Za-z]+?)(?:_?(\d+)|_([A-Za-z0-9]+))?$/);
-  if (!n) return null;
-  let [, base, sub = n[3]] = n;
-  if (GREEK_WORD.test(base)) base = '\\' + base;
-  else if (base.length > 1) {
-    // "CL" -> C_L, "Re" -> R_e; longer words are descriptions, not symbols
-    if (base.length > 3 || sub) return null;
-    [base, sub] = [base[0], base.slice(1)];
+// Word's linear format writes subscripts of subscripts as C_(l_(α_Wing)); turn those brackets into braces
+function subBraces(s) {
+  let out = '';
+  const stack = [];
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '(') { const sub = s[i - 1] === '_'; stack.push(sub); out += sub ? '{' : '('; }
+    else if (s[i] === ')') out += stack.pop() ? '}' : ')';
+    else out += s[i];
   }
-  const nameLatex = sub ? `${base}_{${sub}}` : base;
-  const key = scan(tokenize(nameLatex)).occ[0]?.name;
-  return key ? { nameLatex, key } : null;
+  return out;
+}
+
+const symbolOnly = nameLatex => {
+  const t = tokenize(nameLatex), { occ } = scan(t);
+  return occ.length === 1 && occ[0].start === 0 && occ[0].end === t.length ? { nameLatex, key: occ[0].name } : null;
+};
+
+// "v0", "C_L", "CL", "AR_wing", "ρ", "theta", "C_(l_(α_Wing))", "(∂ε)/(∂α)" -> { nameLatex, key },
+// or null if it doesn't look like a symbol (e.g. a description)
+export function varName(cell) {
+  let s = cell.trim().replace(/^\$|\$$/g, '').replace(/\s+/g, '');
+  const d = s.match(/^\(?([∂d])(.+?)\)?\/\(?\1(.+?)\)?$/);
+  if (d) {
+    const a = varName(d[2]), b = varName(d[3]), op = d[1] === '∂' ? '\\partial ' : 'd';
+    return a && b ? symbolOnly(`\\frac{${op}${a.nameLatex}}{${op}${b.nameLatex}}`) : null;
+  }
+  s = subBraces(s)
+    .replace(/[α-ωΓ-Ω]/g, c => UNICODE_GREEK[c] ? '\\' + (c === 'ε' ? 'varepsilon' : UNICODE_GREEK[c]) + ' ' : c)
+    .replace(/[₀-₉]+/g, n => '_' + [...n].map(c => SUB_DIGITS.indexOf(c)).join(''))
+    .replace(/ (?=[_}]|$)/g, '')
+    .replace(/_([A-Za-z0-9]{2,})/g, '_{$1}'); // α_Wing -> α_{Wing} so the whole word is lowered
+  const m = s.match(/^(\\[A-Za-z]+ ?|[A-Za-z]+?)(?:_?(\d+)|_\{(.+)\}|_([A-Za-z0-9\\ ]+))?$/);
+  if (!m || /[^A-Za-z0-9\\_{} ]/.test(s)) return null;
+  let base = m[1].trim(), sub = m[2] ?? m[3] ?? m[4];
+  if (/^[A-Za-z]+$/.test(base) && GREEK_WORD.test(base)) base = '\\' + base;
+  else if (/^[A-Za-z]{2,}$/.test(base)) {
+    if (base.length > 3) return null; // longer words are descriptions, not symbols
+    // "CL" -> C_L (aero style); with its own subscript keep it whole and upright: AR_wing -> \mathrm{AR}_{wing}
+    if (sub) base = `\\mathrm{${base}}`; else [base, sub] = [base[0], base.slice(1)];
+  }
+  return symbolOnly(sub ? `${base}_{${sub.trim()}}` : base);
 }
 
 // "1,200", "−3.5", "1.2e-5", "1.2 × 10^-5", "2.5×10⁻³ kg" -> { number, latex, rest } (rest = trailing text, e.g. a unit)
@@ -205,7 +251,9 @@ function makeVar(nameCell, valueCell, unitCell = '') {
   if (!name) return null;
   if (!value) return { latex: `${name.nameLatex}=${valueCell.trim()}`, ...name, number: null }; // an expression
   const unit = (unitCell.trim() || value.rest).replace(/^[([]\s*|\s*[)\]]$/g, '').replace(/[{}\\]/g, '').trim();
-  const unitLatex = unit && unit !== '-' && unit !== '–' ? `\\text{ ${unit}}` : '';
+  const sup = n => [...n].map(c => '⁰¹²³⁴⁵⁶⁷⁸⁹'[c] ?? (c === '-' ? '⁻' : '')).join('');
+  const unitText = unit.replace(/\^\(?(-?\d+)\)?/g, (_, n) => sup(n)).replace(/[⋅*]/g, '·');
+  const unitLatex = unit && unit !== '-' && unit !== '–' ? `\\text{ ${unitText}}` : '';
   return { latex: `${name.nameLatex}=${value.latex}${unitLatex}`, ...name, number: value.number };
 }
 
@@ -220,14 +268,14 @@ export function parseVarLine(line) {
 function parseTable(rows) {
   const width = Math.max(...rows.map(r => r.length));
   const col = i => rows.map(r => r[i] ?? '');
-  const head = rows[0].some(c => /symbol|variable|name|param|value|unit/i.test(c)) && !rows[0].some(c => varValue(c)) ? rows[0] : null;
+  const head = rows[0].some(c => /symbol|quantity|variable|name|param|value|unit/i.test(c)) && !rows[0].some(c => varValue(c)) ? rows[0] : null;
   const data = head ? rows.slice(1) : rows;
   const find = re => head ? head.findIndex(c => re.test(c)) : -1;
   const frac = (i, f) => data.filter(r => f(r[i] ?? '')).length / data.length;
   const cols = [...Array(width).keys()];
   let value = find(/value|magnitude|amount|number|\bval\b/i);
   if (value < 0) value = cols.reduce((b, i) => frac(i, varValue) > frac(b, varValue) ? i : b, 0);
-  let name = [/symbol/i, /variable|param/i, /name/i].map(find).find(i => i >= 0 && i !== value) ?? -1;
+  let name = [/symbol/i, /quantity|variable|param/i, /name/i].map(find).find(i => i >= 0 && i !== value) ?? -1;
   if (name < 0) name = cols.filter(i => i !== value).reduce((b, i) => b < 0 || frac(i, c => varName(c)) > frac(b, c => varName(c)) ? i : b, -1);
   let unit = find(/unit/i);
   if (unit < 0 && !head && value + 1 < width && value + 1 !== name && frac(value + 1, c => c.trim().length <= 12 && !varValue(c)) >= .5) unit = value + 1;
