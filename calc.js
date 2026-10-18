@@ -518,6 +518,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
   // a unit chosen in the Variables pane: converts the value when it can, otherwise just relabels
   const chosen = (name, value, unit, unitText) => {
     if (unitOverrides[name] == null) return { value, unit, unitText };
+    if (!unitOverrides[name].trim()) return { value, unit: {}, unitText: undefined }; // unit deleted: no unit
     const to = parseUnit(unitOverrides[name]), v = Object.keys(unit).length ? convertValue(value, unit, to) : null;
     return { value: v ?? value, unit: to, unitText: prettyUnit(unitOverrides[name]) };
   };

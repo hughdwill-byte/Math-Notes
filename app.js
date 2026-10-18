@@ -68,12 +68,22 @@ function makeEq(latex = '', base) {
   mf.addEventListener('focus', () => { current = w; updateDpLabel(); });
   mf.addEventListener('input', () => {
     if (w.dataset.base != null) {
-      // edited the typed part: keep it filled; edited the filled part: it becomes plain text again
-      const fill = w.dataset.fill ?? '';
-      if (fill && mf.value.endsWith(fill)) w.dataset.base = mf.value.slice(0, -fill.length);
-      else if (mf.value !== w.dataset.base) { delete w.dataset.base; delete w.dataset.fill; }
+      // edited the typed part: keep it filled; edited only the unit after the answer: applied when you leave
+      // the line; edited the filled numbers: it becomes plain text again
+      const fill = w.dataset.fill ?? '', number = fill.replace(/\\text\{[^}]*\}$/, '');
+      if (fill && mf.value.endsWith(fill)) { w.dataset.base = mf.value.slice(0, -fill.length); delete w.dataset.unitEdit; }
+      else if (number !== fill && mf.value.startsWith(w.dataset.base + number)) w.dataset.unitEdit = mf.value.slice((w.dataset.base + number).length);
+      else if (mf.value !== w.dataset.base) { delete w.dataset.base; delete w.dataset.fill; delete w.dataset.unitEdit; }
     }
     schedule();
+  });
+  mf.addEventListener('blur', () => {
+    if (w.dataset.unitEdit == null) return;
+    const edit = w.dataset.unitEdit, typed = edit.match(/^\\text\{([^}]*)\}$/)?.[1] ?? (edit.trim() ? null : '');
+    delete w.dataset.unitEdit;
+    const name = [...result.vars].find(([, v]) => v.id === w.dataset.id)?.[0];
+    if (typed == null || !name) return schedule();
+    changeUnit(name, typed); // '' = you deleted the unit: no unit from now on
   });
   mf.addEventListener('move-out', e => {
     e.preventDefault();
@@ -248,7 +258,8 @@ function recompute() {
   for (const w of eqs) {
     let g = result.ghosts[w.dataset.id] || '';
     if (w.dataset.base == null && result.refill[w.dataset.id] != null) { w.dataset.base = result.refill[w.dataset.id]; w.dataset.fill = ''; }
-    if (w.dataset.base != null) {
+    if (w.dataset.unitEdit != null) g = '';
+    if (w.dataset.base != null && w.dataset.unitEdit == null) { // (not while you're editing the unit)
       const mf = w.firstChild, value = w.dataset.base + g;
       w.dataset.fill = g;
       g = '';
@@ -365,6 +376,7 @@ function renderVars() {
 // the converted number; a calculated variable keeps the chosen unit and its value is converted wherever it's used.
 // Not convertible (or no unit before): the unit is just relabelled.
 function changeUnit(name, text) {
+  if (/^auto$/i.test(text.trim())) { delete unitsOf()[name]; flash('Unit back to the worked-out one'); return recompute(); }
   text = prettyUnit(text); // s^-1 -> s⁻¹
   const v = result.vars.get(name), w = v && doc.querySelector(`.eq[data-id="${v.id}"]`);
   const from = v?.unit ?? {}, to = parseUnit(text);
@@ -376,10 +388,9 @@ function changeUnit(name, text) {
     w.firstChild.value = `${line.slice(0, line.indexOf('='))}=${formatNumber(converted ?? v.value, null)}${text ? `\\text{ ${text}}` : ''}`;
     delete w.dataset.base;
     delete unitsOf()[name];
-  } else if (text) unitsOf()[name] = text;
-  else delete unitsOf()[name];
+  } else unitsOf()[name] = text; // '' = no unit (a deleted unit stays deleted)
   flash(incompatible ? `${formatUnit(from)} and ${text} measure different things, so the unit was relabelled, not converted`
-    : converted != null ? `Converted ${formatUnit(from)} → ${text}` : text ? `Unit set to ${text}` : 'Unit cleared');
+    : converted != null ? `Converted ${formatUnit(from)} → ${text}` : text ? `Unit set to ${text}` : 'Unit removed (type "auto" to get the worked-out unit back)');
   recompute();
 }
 
