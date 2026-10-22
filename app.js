@@ -132,6 +132,7 @@ function leaveScripts(mf, relation = false) {
   for (let i = 0; i < 8; i++) {
     const atom = model?.at(model.position);
     if (!branches.test(atom?.parentBranch) || atom.type === 'first') return;
+    if (/^(extensible-symbol|operator)$/.test(atom.parent?.type)) return; // limits of ∑ ∏ ∫ lim: i=1 belongs there
     // inside a bracket opened in this power/subscript (e^{-0.1(C-20)}): the operator belongs in there
     const sibs = atom.parent?.branch?.(atom.parentBranch) ?? [], upTo = sibs.slice(0, sibs.indexOf(atom) + 1);
     if (upTo.filter(x => x.type === 'mopen').length > upTo.filter(x => x.type === 'mclose').length) return;
@@ -238,6 +239,8 @@ function insertIntoEq(latex) {
   const mf = activeField();
   mf.focus();
   mf.insert(latex, { selectionMode: 'placeholder', focus: true });
+  // ∑/∏/∫ with both limits: MathLive starts in the top limit; start in the bottom one (i=1) instead
+  if (/^\\[a-z]+_\{#\?\}\^\{#\?\}/.test(latex)) mf.executeCommand('moveToNextPlaceholder');
   schedule();
 }
 
