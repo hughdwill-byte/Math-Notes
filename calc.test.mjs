@@ -135,6 +135,13 @@ r = run(['C_{L_{a}}=4.3', 'M=2C_{L_{\\alpha}}=']);
 assert.deepEqual(r.hints[1], [['C_{L_{\\alpha}}', 'C_{L_{a}}']]);
 assert.equal(run(['a=1', 'x=-3y-2z+a=']).ghosts[1], '-3y-2z+1'); // negative coefficients read naturally
 assert.deepEqual(run(['C_{l_{a}}=6', 'C_{L_{a}}=4', 'M=C_{L_{\\alpha}}=']).hints[2], [['C_{L_{\\alpha}}', 'C_{L_{a}}']]); // case matters
+// e is Euler's number
+assert.ok(Math.abs(run(['x=e^{2}']).vars.get('x').value - Math.E ** 2) < 1e-13);
+r = run(['C=25', '\\phi=\\frac{1.036}{1+103.99e^{-0.0996\\left(C-20\\right)}}=']);
+assert.ok(Math.abs(r.vars.get('phi').value - 1.036 / (1 + 103.99 * Math.exp(-0.0996 * 5))) < 1e-12);
+assert.ok(r.ghosts[1].includes('e^{-0.0996\\left(25-20\\right)}'), r.ghosts[1]); // e stays e in the working
+assert.equal(run(['e=3', 'x=2e']).vars.get('x').value, 6); // a document's own e wins
+assert.equal(run(['\\phi=\\frac{1}{1+e^{-C}}=']).ghosts[0], undefined); // C unknown: e alone isn't a reason to fill in
 assert.deepEqual(parseVariables('Symbol\tValue\nm\t5\nTotal\tTBC').skipped, ['Total  TBC']);
 // units are ignored in maths; universal constants are known from the start and can be overridden
 r = run(['m=5\\text{ kg}', 'F=mg']);

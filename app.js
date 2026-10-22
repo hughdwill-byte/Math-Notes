@@ -121,7 +121,8 @@ function makeEq(latex = '', base) {
 }
 
 // Like Word: an operator typed in a subscript/superscript goes back to the main line first
-// (C_M= gives C_M =, not C_{M=}); =, < and > also leave fractions (a/b= gives a/b =).
+// (C_M= gives C_M =, not C_{M=}); =, < and > also leave fractions (a/b= gives a/b =). Not while a
+// bracket opened inside the script is still open.
 // An empty box keeps it, so x^-1 still works.
 // ponytail: uses MathLive's internal model (pinned 0.110.0); recheck if MathLive is upgraded
 function leaveScripts(mf, relation = false) {
@@ -130,6 +131,9 @@ function leaveScripts(mf, relation = false) {
   for (let i = 0; i < 8; i++) {
     const atom = model?.at(model.position);
     if (!branches.test(atom?.parentBranch) || atom.type === 'first') return;
+    // inside a bracket opened in this power/subscript (e^{-0.1(C-20)}): the operator belongs in there
+    const sibs = atom.parent?.branch?.(atom.parentBranch) ?? [], upTo = sibs.slice(0, sibs.indexOf(atom) + 1);
+    if (upTo.filter(x => x.type === 'mopen').length > upTo.filter(x => x.type === 'mclose').length) return;
     mf.executeCommand('moveAfterParent');
   }
 }
@@ -369,7 +373,7 @@ function renderVars() {
     : '<p class="hint">No variables yet. Type something like x=5, or use Paste variables.</p>') +
     `<h4>Universal <button data-act="editUniversals" title="Edit the universal constants (all projects)"><span class="icon">edit</span>Edit</button></h4>
     <p class="hint">Known in every project. ✕ stops using one in this project; writing e.g. g=10 overrides it from that line down.</p>
-    <table>${uni}</table>`;
+    <table><tr title="Built in: Euler's number. Writing e=... in the document overrides it."><td data-latex="e">${convertLatexToMarkup('e')}</td><td>2.718281828459045</td><td></td></tr>${uni}</table>`;
 }
 
 // A unit picked in the Variables pane. Convertible (mm -> m): a "name = number unit" line is rewritten with

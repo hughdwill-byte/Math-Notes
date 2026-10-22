@@ -543,6 +543,8 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
     }));
   };
   // unitText: the unit as written (s⁻¹), shown instead of the worked-out form (1/s) when there is one
+  // e is Euler's number (2.718281828459045, kept as e in the working) unless the document defines its own e
+  const isKnown = name => vars.has(name) || name === 'e';
   const set = (name, latex, value, id, unit = {}, unitText) => {
     ({ value, unit, unitText } = chosen(name, value, unit, unitText));
     if (dp[name] != null) value = Number(value.toFixed(dp[name]));
@@ -576,7 +578,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
   const withUnit = (num, u, text) => (text ? `${num}\\text{ ${text}}` : u && Object.keys(u).length ? `${num}\\text{ ${formatUnit(u)}}` : num);
   const evalTokens = (t, extra = {}) => {
     const { occ } = scan(t);
-    if (occ.some(o => !(o.name in extra) && !vars.has(o.name))) return null;
+    if (occ.some(o => !(o.name in extra) && !isKnown(o.name))) return null;
     try { return toNumber(ce.parse(join(substitute(t, occ, { ...vals(t), ...extra }))).N()); } catch { return null; }
   };
 
@@ -590,7 +592,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
       if (parts.length < 2) continue;
       suggestFrom(parts);
       const scans = parts.map(scan);
-      const unknownsIn = s => s.occ.filter(o => !vars.has(o.name));
+      const unknownsIn = s => s.occ.filter(o => !isKnown(o.name));
       const p0 = scans[0].occ;
       const target = p0.length === 1 && p0[0].start === 0 && p0[0].end === parts[0].length ? p0[0] : null;
       const trailingEmpty = parts[parts.length - 1].length === 0;
@@ -658,7 +660,7 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
         const names = [...new Set(src.s.occ.map(o => o.name))];
         const ph = {}, back = {};
         names.forEach((n, i) => {
-          if (vars.has(n)) return;
+          if (isKnown(n)) return;
           const p = 'qq' + String.fromCharCode(97 + Math.floor(i / 26)) + String.fromCharCode(97 + i % 26);
           ph[n] = `\\mathrm{${p}}`;
           back[p] = src.s.occ.find(o => o.name === n).latex;
@@ -668,6 +670,9 @@ export function evaluateDocument(ce, eqs, dp, showWorking, initial = [], unitOve
           const simplified = toLatex(ce, fold(ce, ce.parse(join(substitute(src.p, src.s.occ, { ...vals(src.p), ...ph })), { canonical: false }).json), back);
           const steps = [showWorking && src.s.occ.some(o => vars.has(o.name)) ? withNumbers : null, simplified]
             .filter((x, i, l) => x && x !== join(src.p) && x !== l[i - 1]);
+          // only reordered (1+e^{-C} -> e^{-C}+1), nothing worked out: no suggestion
+          const sameBits = (x, y) => tokenize(x).sort().join() === tokenize(y).sort().join();
+          if (steps.length === 1 && sameBits(steps[0], join(src.p))) steps.pop();
           if (steps.length) ghost = steps.join('=');
         } catch {}
         continue;
