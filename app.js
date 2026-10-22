@@ -135,6 +135,7 @@ function leaveScripts(mf, relation = false) {
     if (/^(extensible-symbol|operator)$/.test(atom.parent?.type)) return; // limits of ∑ ∏ ∫ lim: i=1 belongs there
     // inside a bracket opened in this power/subscript (e^{-0.1(C-20)}): the operator belongs in there
     const sibs = atom.parent?.branch?.(atom.parentBranch) ?? [], upTo = sibs.slice(0, sibs.indexOf(atom) + 1);
+    if (sibs.indexOf(atom) < sibs.length - 1) return; // editing in the middle (n|i): the operator goes where the caret is
     if (upTo.filter(x => x.type === 'mopen').length > upTo.filter(x => x.type === 'mclose').length) return;
     mf.executeCommand('moveAfterParent');
   }
