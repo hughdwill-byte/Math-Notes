@@ -57,6 +57,7 @@ function makeEq(latex = '', base) {
   if (base != null) w.dataset.base = base;
   const mf = new MathfieldElement();
   mf.addEventListener('mount', () => {
+    mf.smartSuperscript = false; // powers keep 2.5 or 12 until space, an arrow or an operator (like Word)
     mf.inlineShortcuts = shortcuts ??= Object.fromEntries(Object.entries(mf.inlineShortcuts).filter(([k]) => !NO_SHORTCUT.includes(k)));
   });
   mf.placeholder = '\\text{Type equation here.}';
